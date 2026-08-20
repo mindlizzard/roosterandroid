@@ -92,6 +92,8 @@ class AppController(private val storage: ScheduleStorage) {
         private set
     var status by mutableStateOf<String?>(null)
         private set
+    var scenarioSummaries by mutableStateOf(emptyList<String>())
+        private set
 
     private fun commit(newState: AppState, message: String? = null) {
         state = newState
@@ -150,10 +152,14 @@ class AppController(private val storage: ScheduleStorage) {
             return
         }
         val updated = state.absences.filterNot { it.id == absence.id } + absence
-        val keepAssignments = state.assignments.filterNot { a ->
-            if (a.employeeId != absence.employeeId) return@filterNot false
-            val d = runCatching { LocalDate.parse(a.date) }.getOrNull() ?: return@filterNot false
-            !d.isBefore(start) && !d.isAfter(end)
+        val keepAssignments = if (absence.status == AbsenceStatus.APPROVED) {
+            state.assignments.filterNot { a ->
+                if (a.employeeId != absence.employeeId) return@filterNot false
+                val d = runCatching { LocalDate.parse(a.date) }.getOrNull() ?: return@filterNot false
+                !d.isBefore(start) && !d.isAfter(end)
+            }
+        } else {
+            state.assignments
         }
         commit(state.copy(absences = updated, assignments = keepAssignments), "${absence.type.name.lowercase()} opgeslagen")
     }
@@ -273,7 +279,11 @@ class AppController(private val storage: ScheduleStorage) {
         val employee = state.employees.firstOrNull { it.id == employeeId } ?: return "manager niet gevonden"
         val template = state.shiftTemplates.firstOrNull { it.id == templateId } ?: return "dienst niet gevonden"
         val d = runCatching { LocalDate.parse(date) }.getOrNull() ?: return "ongeldige datum"
-        state.absences.firstOrNull { it.employeeId == employeeId && it.includes(d) }?.let {
+        state.absences.firstOrNull {
+            it.employeeId == employeeId &&
+                it.status == AbsenceStatus.APPROVED &&
+                it.includes(d)
+        }?.let {
             return "${employee.name} heeft ${it.type.name.lowercase()}"
         }
         if (!employee.canWork(template.kind)) return "${employee.name} mag ${shiftKindLabel(template.kind)} niet werken"
@@ -294,6 +304,104 @@ class AppController(private val storage: ScheduleStorage) {
             if (endDt.isAfter(latestDt)) return "dienst eindigt na beschikbaarheid van ${employee.name}"
         }
         return null
+    }
+
+    fun upsertDayDemand(demand: DayDemand) {
+        val updated = state.dayDemands.filterNot { it.date == demand.date } + demand
+        commit(state.copy(dayDemands = updated), "Bezetting opgeslagen")
+    }
+
+    fun swapAssignments(firstAssignmentId: String, secondAssignmentId: String) {
+        if (firstAssignmentId == secondAssignmentId) {
+            status = "Kies twee verschillende diensten"
+            return
+        }
+
+        val first = state.assignments.firstOrNull { it.id == firstAssignmentId }
+        val second = state.assignments.firstOrNull { it.id == secondAssignmentId }
+        if (first == null || second == null) {
+            status = "Dienst niet gevonden"
+            return
+        }
+        if (first.employeeId == second.employeeId) {
+            status = "Kies diensten van twee verschillende managers"
+            return
+        }
+
+        manualBlockReason(second.employeeId, first.date, first.shiftTemplateId)?.let {
+            status = "Ruil niet mogelijk: $it"
+            return
+        }
+        manualBlockReason(first.employeeId, second.date, second.shiftTemplateId)?.let {
+            status = "Ruil niet mogelijk: $it"
+            return
+        }
+
+        val swappedFirst = first.copy(employeeId = second.employeeId, source = "manual-swap")
+        val swappedSecond = second.copy(employeeId = first.employeeId, source = "manual-swap")
+        val keep = state.assignments.filterNot { it.id == first.id || it.id == second.id }
+        val proposed = state.copy(assignments = keep + swappedFirst + swappedSecond)
+
+        val involved = setOf(first.employeeId, second.employeeId)
+        val baseline = validator.validate(state)
+            .filter { it.severity == AtwValidator.Severity.ERROR && it.employeeId in involved }
+            .map { "${it.employeeId}|${it.date}|${it.rule}|${it.message}" }
+            .toSet()
+
+        val newErrors = validator.validate(proposed)
+            .filter { it.severity == AtwValidator.Severity.ERROR && it.employeeId in involved }
+            .filter { "${it.employeeId}|${it.date}|${it.rule}|${it.message}" !in baseline }
+
+        if (newErrors.isNotEmpty()) {
+            status = "Ruil niet mogelijk: ${newErrors.first().message}"
+            return
+        }
+
+        val record = ShiftSwapRecord(
+            firstAssignmentId = first.id,
+            secondAssignmentId = second.id,
+            firstEmployeeId = first.employeeId,
+            secondEmployeeId = second.employeeId,
+            firstDate = first.date,
+            secondDate = second.date
+        )
+        commit(
+            proposed.copy(swapHistory = state.swapHistory + record),
+            "Diensten geruild"
+        )
+    }
+
+    fun compareScenarios() {
+        val normal = engine.generate(state)
+
+        val withoutBorrowedState = state.copy(
+            employees = state.employees.map {
+                if (it.role == EmployeeRole.BORROWED) it.copy(active = false) else it
+            }
+        )
+        val withoutBorrowed = engine.generate(withoutBorrowedState)
+
+        val freeDaysState = state.copy(
+            settings = state.settings.copy(
+                minimumTwoDayOffBlocks = maxOf(1, state.settings.minimumTwoDayOffBlocks),
+                preferredTwoDayOffBlocks = maxOf(2, state.settings.preferredTwoDayOffBlocks)
+            )
+        )
+        val freeDays = engine.generate(freeDaysState)
+
+        fun line(name: String, result: ScheduleEngine.Result): String {
+            val borrowed = result.assignments.count { a ->
+                state.employees.firstOrNull { it.id == a.employeeId }?.role == EmployeeRole.BORROWED
+            }
+            return "$name • open ${result.unfilled.size} • waarschuwingen ${result.warnings.size} • leen $borrowed"
+        }
+
+        scenarioSummaries = listOf(
+            line("Normaal", normal),
+            line("Zonder leenmanager", withoutBorrowed),
+            line("Voorkeur 2 dagen vrij", freeDays)
+        )
+        status = "Scenario's vergeleken"
     }
 
     fun updateTemplate(template: ShiftTemplate) {
@@ -1045,7 +1153,9 @@ private fun ScheduleScreen(controller: AppController) {
                                     it.employeeId == employee.id && it.weekday == date.dayOfWeek.value
                                 }
                             val absence = controller.state.absences.lastOrNull {
-                                it.employeeId == employee.id && it.includes(date)
+                                it.employeeId == employee.id &&
+                                    it.status == AbsenceStatus.APPROVED &&
+                                    it.includes(date)
                             }
                             val unavailable =
                                 explicitAvailability?.available == false ||
@@ -1206,20 +1316,34 @@ private fun matrixShiftLabel(
 private fun absenceMatrixLabel(absence: Absence): String = when (absence.type) {
     AbsenceType.VACATION -> "Vakantie"
     AbsenceType.LEAVE -> "Verlof"
+    AbsenceType.SPECIAL_LEAVE -> "Bijz. verlof"
+    AbsenceType.UNPAID_LEAVE -> "Onbet. verlof"
+    AbsenceType.COMP_TIME -> "Comp."
     AbsenceType.SICK -> "Ziek"
+    AbsenceType.MATERNITY -> "Zw.verlof"
+    AbsenceType.ADAPTED_WORK -> "Aangepast"
+    AbsenceType.TRAINING -> "Training"
     AbsenceType.OTHER -> "Afwezig"
 }
 
 private fun absenceColor(type: AbsenceType): Color = when (type) {
     AbsenceType.VACATION -> MatrixColors.Vacation
-    AbsenceType.LEAVE -> MatrixColors.Leave
     AbsenceType.SICK -> MatrixColors.Sick
+    AbsenceType.LEAVE,
+    AbsenceType.SPECIAL_LEAVE,
+    AbsenceType.UNPAID_LEAVE,
+    AbsenceType.COMP_TIME,
+    AbsenceType.MATERNITY -> MatrixColors.Leave
+    AbsenceType.ADAPTED_WORK,
+    AbsenceType.TRAINING -> MatrixColors.Present
     AbsenceType.OTHER -> MatrixColors.Unavailable
 }
 
 private fun responsibilityAppliesUi(rule: ResponsibilityRule, date: LocalDate, ym: YearMonth): Boolean = when (rule.recurrence) {
     RecurrenceType.WEEKLY -> date.dayOfWeek.value == rule.weekday
+    RecurrenceType.MONTHLY_DAY -> rule.monthDay != null && date.dayOfMonth == rule.monthDay
     RecurrenceType.MONTH_END -> date == ym.atEndOfMonth()
+    RecurrenceType.SPECIFIC_DATE -> rule.date == date.toString()
 }
 
 private fun responsibilityLabelUi(rule: ResponsibilityRule): String = rule.label.ifBlank {
@@ -1229,9 +1353,15 @@ private fun responsibilityLabelUi(rule: ResponsibilityRule): String = rule.label
         ResponsibilityType.MAINTENANCE -> "Onderhoud"
         ResponsibilityType.ADMIN -> "Admin"
         ResponsibilityType.KPI -> "KPI"
+        ResponsibilityType.HACCP -> "HACCP"
+        ResponsibilityType.STOCK -> "Voorraad"
         ResponsibilityType.HAVI -> "HAVI"
-        ResponsibilityType.PRESENT -> "Aanwezig"
-        ResponsibilityType.OTHER -> "Taak"
+        ResponsibilityType.TRAINING -> "Training"
+        ResponsibilityType.MEETING -> "Meeting"
+        ResponsibilityType.OFFICE -> "Kantoor"
+        ResponsibilityType.INTERVIEW -> "Sollicitatie"
+        ResponsibilityType.CREW_PLANNING -> "Crewplanning"
+        ResponsibilityType.CUSTOM -> "Taak"
     }
 }
 
@@ -1241,6 +1371,8 @@ private fun personMarkerLabelUi(marker: PersonDayMarker): String {
         PersonMarkerType.OFFICE -> "Kantoor"
         PersonMarkerType.TRAINING -> "Training"
         PersonMarkerType.MEETING -> "Meeting"
+        PersonMarkerType.MAINTENANCE -> "Onderhoud"
+        PersonMarkerType.ADMIN -> "Admin"
         PersonMarkerType.OTHER -> "Marker"
     }
     return if (marker.note.isBlank()) base else "$base: ${marker.note}"

@@ -26,7 +26,7 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
             .filter { isInMonth(it, ym) && it.source.startsWith("manual") }
             .filterNot { a ->
                 val d = runCatching { LocalDate.parse(a.date) }.getOrNull()
-                d != null && state.absences.any { it.employeeId == a.employeeId && it.includes(d) }
+                d != null && state.absences.any { it.employeeId == a.employeeId && it.status == AbsenceStatus.APPROVED && it.includes(d) }
             }
             .distinctBy { "${it.employeeId}|${it.date}" }
             .toMutableList()
@@ -40,35 +40,8 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
         for (day in 1..ym.lengthOfMonth()) {
             val date = ym.atDay(day)
 
-            val taskRules = state.responsibilities.filter {
-                it.active && it.ensureScheduled && responsibilityApplies(it, date, ym)
-            }
-            for (rule in taskRules) {
-                val employee = employees.firstOrNull { it.id == rule.employeeId }
-                if (employee == null) continue
-                if (generated.any { it.employeeId == employee.id && it.date == date.toString() }) continue
-                if (state.absences.any { it.employeeId == employee.id && it.includes(date) }) {
-                    unfilled += "$date ${employee.name}: ${responsibilityLabel(rule)} kan niet door afwezigheid."
-                    continue
-                }
-                val preferredKind = when (rule.type) {
-                    ResponsibilityType.KPI -> ShiftKind.KPI
-                    ResponsibilityType.HAVI -> ShiftKind.SETUP
-                    else -> ShiftKind.DAY
-                }
-                val template = chooseTemplate(date, preferredKind, state.shiftTemplates)
-                    ?: chooseTemplate(date, ShiftKind.DAY, state.shiftTemplates)
-                if (template != null && canAssign(employee, date, template, generated, history, state)) {
-                    generated += Assignment(
-                        employeeId = employee.id,
-                        date = date.toString(),
-                        shiftTemplateId = template.id,
-                        source = "responsibility"
-                    )
-                } else {
-                    unfilled += "$date ${employee.name}: ${responsibilityLabel(rule)} kan niet zonder beschikbaarheids/ATW-conflict."
-                }
-            }
+            // Vaste taken zijn overlays op een gewone dienst.
+            // Ze sturen alleen de voorkeur en maken nooit zelf extra bezetting aan.
 
             val fixedForDay = state.availability.filter {
                 it.date == date.toString() && it.available && it.fixedShiftKind != null
@@ -140,6 +113,49 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
                     date = date.toString(),
                     shiftTemplateId = template.id,
                     source = "generated"
+                )
+            }
+
+            val minimumManagers = state.dayDemands
+                .lastOrNull { it.date == date.toString() }
+                ?.minimumManagers
+                ?.coerceAtLeast(0)
+                ?: 0
+
+            while (generated.count { it.date == date.toString() } < minimumManagers) {
+                val extraTemplate =
+                    chooseTemplate(date, ShiftKind.DAY, state.shiftTemplates)
+                        ?: chooseTemplate(date, ShiftKind.MIDDLE, state.shiftTemplates)
+                        ?: chooseTemplate(date, ShiftKind.SETUP, state.shiftTemplates)
+
+                if (extraTemplate == null) {
+                    unfilled += "$date: minimumbezetting $minimumManagers gevraagd, maar geen bruikbaar extra diensttemplate."
+                    break
+                }
+
+                var pool = employees.filter { employee ->
+                    canAssign(employee, date, extraTemplate, generated, history, state)
+                }
+
+                if (state.settings.minimizeBorrowedManagers) {
+                    val ownManagers = pool.filter { it.role != EmployeeRole.BORROWED }
+                    if (ownManagers.isNotEmpty()) pool = ownManagers
+                }
+
+                if (pool.isEmpty()) {
+                    unfilled += "$date: minimumbezetting $minimumManagers managers niet haalbaar zonder conflict."
+                    break
+                }
+
+                val chosen = pool.minBy { employee ->
+                    score(employee, date, extraTemplate.kind, generated + history, state)
+                }
+
+                generated += Assignment(
+                    employeeId = chosen.id,
+                    date = date.toString(),
+                    shiftTemplateId = extraTemplate.id,
+                    source = "demand"
                 )
             }
 
@@ -308,6 +324,14 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
         }
 
         if (date.dayOfWeek.value in state.settings.busyWeekdays) score -= 0.5
+        if (
+            state.responsibilities.any {
+                it.active &&
+                    it.preferScheduled &&
+                    it.employeeId == employee.id &&
+                    responsibilityApplies(it, date, YearMonth.from(date))
+            }
+        ) score -= 8.0
         return score
     }
 
@@ -344,7 +368,7 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
         history: List<Assignment>,
         state: AppState
     ): Boolean {
-        if (state.absences.any { it.employeeId == employee.id && it.includes(date) }) return false
+        if (state.absences.any { it.employeeId == employee.id && it.status == AbsenceStatus.APPROVED && it.includes(date) }) return false
         if (!employee.canWork(template.kind)) return false
         if (generated.any { it.employeeId == employee.id && it.date == date.toString() }) return false
         if (!isAvailable(employee, date, template, state)) return false
@@ -402,7 +426,7 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
         template: ShiftTemplate,
         state: AppState
     ): Boolean {
-        if (state.absences.any { it.employeeId == employee.id && it.includes(date) }) return false
+        if (state.absences.any { it.employeeId == employee.id && it.status == AbsenceStatus.APPROVED && it.includes(date) }) return false
 
         val specific = state.availability.lastOrNull {
             it.employeeId == employee.id && it.date == date.toString()
@@ -465,7 +489,7 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
         val base = minOf(employee.contractedDaysPerWeek, employee.maxShiftsPerWeek)
         val absentDays = (0L..6L).count { offset ->
             val date = monday.plusDays(offset)
-            state.absences.any { it.employeeId == employee.id && it.includes(date) }
+            state.absences.any { it.employeeId == employee.id && it.status == AbsenceStatus.APPROVED && it.includes(date) }
         }
         return (base - absentDays).coerceAtLeast(0)
     }
@@ -512,13 +536,23 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
 
         val traineePenalty = if (employee.role == EmployeeRole.TRAINEE) 0.4 else 0.0
 
+        val taskPreference = if (
+            state.responsibilities.any {
+                it.active &&
+                    it.preferScheduled &&
+                    it.employeeId == employee.id &&
+                    responsibilityApplies(it, date, YearMonth.from(date))
+            }
+        ) -8.0 else 0.0
+
         return relativeLoad * 12.0 +
             weeklyCount * 1.7 +
             sameKindCount * 0.9 +
             weekendPenalty +
             borrowedPenalty +
             traineePenalty -
-            weekDeficit * 1.3
+            weekDeficit * 1.3 +
+            taskPreference
     }
 
     private fun countTwoDayOffBlocks(
@@ -548,7 +582,9 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
     private fun responsibilityApplies(rule: ResponsibilityRule, date: LocalDate, ym: YearMonth): Boolean =
         when (rule.recurrence) {
             RecurrenceType.WEEKLY -> date.dayOfWeek.value == rule.weekday
+            RecurrenceType.MONTHLY_DAY -> rule.monthDay != null && date.dayOfMonth == rule.monthDay
             RecurrenceType.MONTH_END -> date == ym.atEndOfMonth()
+            RecurrenceType.SPECIFIC_DATE -> rule.date == date.toString()
         }
 
     private fun responsibilityLabel(rule: ResponsibilityRule): String =
@@ -559,9 +595,15 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
                 ResponsibilityType.MAINTENANCE -> "onderhoud"
                 ResponsibilityType.ADMIN -> "administratie"
                 ResponsibilityType.KPI -> "KPI"
+                ResponsibilityType.HACCP -> "HACCP"
+                ResponsibilityType.STOCK -> "voorraad"
                 ResponsibilityType.HAVI -> "HAVI"
-                ResponsibilityType.PRESENT -> "aanwezig"
-                ResponsibilityType.OTHER -> "vaste taak"
+                ResponsibilityType.TRAINING -> "training"
+                ResponsibilityType.MEETING -> "meeting"
+                ResponsibilityType.OFFICE -> "kantoor"
+                ResponsibilityType.INTERVIEW -> "sollicitatie"
+                ResponsibilityType.CREW_PLANNING -> "crewplanning"
+                ResponsibilityType.CUSTOM -> "vaste taak"
             }
         }
 

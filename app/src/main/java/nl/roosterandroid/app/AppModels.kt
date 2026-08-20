@@ -178,7 +178,8 @@ data class PlannerSettings(
     val showWeeklyCount: Boolean = true,
     val weekCountWeekday: Int = 1,
     val showMonthCountOnLastDay: Boolean = true,
-    val monthEndCloseManagers: Int = 2
+    val monthEndCloseManagers: Int = 2,
+    val warnMinimumFreeSundays: Boolean = true
 )
 
 @Serializable
