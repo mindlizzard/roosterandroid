@@ -23,7 +23,11 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
         val employeeById = state.employees.associateBy { it.id }
 
         val locked = state.assignments
-            .filter { isInMonth(it, ym) && it.source == "manual" }
+            .filter { isInMonth(it, ym) && it.source.startsWith("manual") }
+            .filterNot { a ->
+                val d = runCatching { LocalDate.parse(a.date) }.getOrNull()
+                d != null && state.absences.any { it.employeeId == a.employeeId && it.includes(d) }
+            }
             .distinctBy { "${it.employeeId}|${it.date}" }
             .toMutableList()
 
@@ -35,6 +39,36 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
 
         for (day in 1..ym.lengthOfMonth()) {
             val date = ym.atDay(day)
+
+            val taskRules = state.responsibilities.filter {
+                it.active && it.ensureScheduled && responsibilityApplies(it, date, ym)
+            }
+            for (rule in taskRules) {
+                val employee = employees.firstOrNull { it.id == rule.employeeId }
+                if (employee == null) continue
+                if (generated.any { it.employeeId == employee.id && it.date == date.toString() }) continue
+                if (state.absences.any { it.employeeId == employee.id && it.includes(date) }) {
+                    unfilled += "$date ${employee.name}: ${responsibilityLabel(rule)} kan niet door afwezigheid."
+                    continue
+                }
+                val preferredKind = when (rule.type) {
+                    ResponsibilityType.KPI -> ShiftKind.KPI
+                    ResponsibilityType.HAVI -> ShiftKind.SETUP
+                    else -> ShiftKind.DAY
+                }
+                val template = chooseTemplate(date, preferredKind, state.shiftTemplates)
+                    ?: chooseTemplate(date, ShiftKind.DAY, state.shiftTemplates)
+                if (template != null && canAssign(employee, date, template, generated, history, state)) {
+                    generated += Assignment(
+                        employeeId = employee.id,
+                        date = date.toString(),
+                        shiftTemplateId = template.id,
+                        source = "responsibility"
+                    )
+                } else {
+                    unfilled += "$date ${employee.name}: ${responsibilityLabel(rule)} kan niet zonder beschikbaarheids/ATW-conflict."
+                }
+            }
 
             val fixedForDay = state.availability.filter {
                 it.date == date.toString() && it.available && it.fixedShiftKind != null
@@ -173,10 +207,10 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
 
         weeksTouchingMonth(ym).forEach { monday ->
             employees.filter { it.role != EmployeeRole.BORROWED }.forEach { employee ->
-                val target = minOf(employee.contractedDaysPerWeek, employee.maxShiftsPerWeek)
+                val target = effectiveWeeklyTarget(employee, monday, state)
                 val actual = weeklyShiftCount(employee, monday, generated + history)
                 if (actual < target) {
-                    warnings += "${employee.name}: week ${weekNumber(monday)} heeft $actual/$target contractdagen ingepland."
+                    warnings += "${employee.name}: week ${weekNumber(monday)} heeft $actual/$target inzetbare contractdagen ingepland."
                 }
             }
         }
@@ -189,7 +223,7 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
 
         return Result(
             generated.sortedWith(compareBy<Assignment>({ it.date }, { it.employeeId })),
-            unfilled,
+            unfilled.distinct(),
             warnings.distinct()
         )
     }
@@ -205,7 +239,7 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
 
         for (monday in weeksTouchingMonth(ym)) {
             for (employee in regularEmployees.sortedByDescending { it.contractedDaysPerWeek }) {
-                val target = minOf(employee.contractedDaysPerWeek, employee.maxShiftsPerWeek)
+                val target = effectiveWeeklyTarget(employee, monday, state)
                 var safety = 0
                 while (weeklyShiftCount(employee, monday, generated + history) < target && safety++ < 10) {
                     val weekDates = (0L..6L)
@@ -310,6 +344,7 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
         history: List<Assignment>,
         state: AppState
     ): Boolean {
+        if (state.absences.any { it.employeeId == employee.id && it.includes(date) }) return false
         if (!employee.canWork(template.kind)) return false
         if (generated.any { it.employeeId == employee.id && it.date == date.toString() }) return false
         if (!isAvailable(employee, date, template, state)) return false
@@ -367,6 +402,8 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
         template: ShiftTemplate,
         state: AppState
     ): Boolean {
+        if (state.absences.any { it.employeeId == employee.id && it.includes(date) }) return false
+
         val specific = state.availability.lastOrNull {
             it.employeeId == employee.id && it.date == date.toString()
         }
@@ -424,6 +461,15 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
         }
     }
 
+    private fun effectiveWeeklyTarget(employee: Employee, monday: LocalDate, state: AppState): Int {
+        val base = minOf(employee.contractedDaysPerWeek, employee.maxShiftsPerWeek)
+        val absentDays = (0L..6L).count { offset ->
+            val date = monday.plusDays(offset)
+            state.absences.any { it.employeeId == employee.id && it.includes(date) }
+        }
+        return (base - absentDays).coerceAtLeast(0)
+    }
+
     private fun score(
         employee: Employee,
         date: LocalDate,
@@ -440,14 +486,12 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
         val hours = inMonth.sumOf { a ->
             templates[a.shiftTemplateId]?.let { durationHours(it) } ?: 0.0
         }
-        val targetMonthlyHours =
-            employee.contractedHoursPerWeek * ym.lengthOfMonth() / 7.0
-        val relativeLoad =
-            if (targetMonthlyHours <= 0.0) hours else hours / targetMonthlyHours
+        val targetMonthlyHours = employee.contractedHoursPerWeek * ym.lengthOfMonth() / 7.0
+        val relativeLoad = if (targetMonthlyHours <= 0.0) hours else hours / targetMonthlyHours
 
         val monday = date.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
         val weeklyCount = weeklyShiftCount(employee, monday, assignments)
-        val targetDays = maxOf(1, employee.contractedDaysPerWeek)
+        val targetDays = maxOf(1, effectiveWeeklyTarget(employee, monday, state))
         val weekDeficit = targetDays - weeklyCount
 
         val sameKindCount = inMonth.count {
@@ -458,18 +502,15 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
             d?.dayOfWeek == DayOfWeek.SATURDAY || d?.dayOfWeek == DayOfWeek.SUNDAY
         }
 
-        val weekendPenalty =
-            if (date.dayOfWeek == DayOfWeek.SATURDAY ||
-                date.dayOfWeek == DayOfWeek.SUNDAY
-            ) weekendCount * 0.8 else 0.0
+        val weekendPenalty = if (
+            date.dayOfWeek == DayOfWeek.SATURDAY || date.dayOfWeek == DayOfWeek.SUNDAY
+        ) weekendCount * 0.8 else 0.0
 
-        val borrowedPenalty =
-            if (state.settings.minimizeBorrowedManagers &&
-                employee.role == EmployeeRole.BORROWED
-            ) 100.0 else 0.0
+        val borrowedPenalty = if (
+            state.settings.minimizeBorrowedManagers && employee.role == EmployeeRole.BORROWED
+        ) 100.0 else 0.0
 
-        val traineePenalty =
-            if (employee.role == EmployeeRole.TRAINEE) 0.4 else 0.0
+        val traineePenalty = if (employee.role == EmployeeRole.TRAINEE) 0.4 else 0.0
 
         return relativeLoad * 12.0 +
             weeklyCount * 1.7 +
@@ -504,11 +545,29 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
         return blocks
     }
 
+    private fun responsibilityApplies(rule: ResponsibilityRule, date: LocalDate, ym: YearMonth): Boolean =
+        when (rule.recurrence) {
+            RecurrenceType.WEEKLY -> date.dayOfWeek.value == rule.weekday
+            RecurrenceType.MONTH_END -> date == ym.atEndOfMonth()
+        }
+
+    private fun responsibilityLabel(rule: ResponsibilityRule): String =
+        rule.label.ifBlank {
+            when (rule.type) {
+                ResponsibilityType.WEEK_COUNT -> "weektelling"
+                ResponsibilityType.MONTH_COUNT -> "maandtelling"
+                ResponsibilityType.MAINTENANCE -> "onderhoud"
+                ResponsibilityType.ADMIN -> "administratie"
+                ResponsibilityType.KPI -> "KPI"
+                ResponsibilityType.HAVI -> "HAVI"
+                ResponsibilityType.PRESENT -> "aanwezig"
+                ResponsibilityType.OTHER -> "vaste taak"
+            }
+        }
+
     private fun weeksTouchingMonth(ym: YearMonth): List<LocalDate> {
-        val first = ym.atDay(1)
-            .with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
-        val last = ym.atEndOfMonth()
-            .with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
+        val first = ym.atDay(1).with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
+        val last = ym.atEndOfMonth().with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
         val out = mutableListOf<LocalDate>()
         var d = first
         while (!d.isAfter(last)) {
@@ -522,9 +581,7 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
         date.get(java.time.temporal.WeekFields.ISO.weekOfWeekBasedYear())
 
     private fun durationHours(template: ShiftTemplate): Double {
-        var minutes = java.time.Duration
-            .between(template.startTime(), template.endTime())
-            .toMinutes()
+        var minutes = java.time.Duration.between(template.startTime(), template.endTime()).toMinutes()
         if (minutes <= 0) minutes += 24 * 60
         return minutes / 60.0
     }

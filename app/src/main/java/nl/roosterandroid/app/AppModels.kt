@@ -13,6 +13,27 @@ enum class EmployeeRole { MANAGER, RM, TRAINEE, BORROWED }
 enum class ShiftKind { SETUP, DAY, MIDDLE, CLOSE, KPI, CUSTOM }
 
 @Serializable
+enum class AbsenceType { VACATION, LEAVE, SICK, OTHER }
+
+@Serializable
+enum class ResponsibilityType {
+    WEEK_COUNT,
+    MONTH_COUNT,
+    MAINTENANCE,
+    ADMIN,
+    KPI,
+    HAVI,
+    PRESENT,
+    OTHER
+}
+
+@Serializable
+enum class RecurrenceType { WEEKLY, MONTH_END }
+
+@Serializable
+enum class PersonMarkerType { PRESENT, OFFICE, TRAINING, MEETING, OTHER }
+
+@Serializable
 data class Employee(
     val id: String = UUID.randomUUID().toString(),
     val name: String,
@@ -62,6 +83,43 @@ data class WeeklyAvailability(
 )
 
 @Serializable
+data class Absence(
+    val id: String = UUID.randomUUID().toString(),
+    val employeeId: String,
+    val startDate: String,
+    val endDate: String,
+    val type: AbsenceType,
+    val note: String = ""
+) {
+    fun includes(date: LocalDate): Boolean {
+        val start = runCatching { LocalDate.parse(startDate) }.getOrNull() ?: return false
+        val end = runCatching { LocalDate.parse(endDate) }.getOrNull() ?: return false
+        return !date.isBefore(start) && !date.isAfter(end)
+    }
+}
+
+@Serializable
+data class ResponsibilityRule(
+    val id: String = UUID.randomUUID().toString(),
+    val employeeId: String,
+    val type: ResponsibilityType,
+    val recurrence: RecurrenceType = RecurrenceType.WEEKLY,
+    val weekday: Int = 1,
+    val label: String = "",
+    val ensureScheduled: Boolean = true,
+    val active: Boolean = true
+)
+
+@Serializable
+data class PersonDayMarker(
+    val id: String = UUID.randomUUID().toString(),
+    val employeeId: String,
+    val date: String,
+    val type: PersonMarkerType = PersonMarkerType.PRESENT,
+    val note: String = ""
+)
+
+@Serializable
 data class DayNote(
     val date: String,
     val text: String
@@ -97,7 +155,8 @@ data class PlannerSettings(
     val showWeeklyCount: Boolean = true,
     val weekCountWeekday: Int = 1,
     val showMonthCountOnLastDay: Boolean = true,
-    val monthEndCloseManagers: Int = 2
+    val monthEndCloseManagers: Int = 2,
+    val warnMinimumFreeSundays: Boolean = true
 )
 
 @Serializable
@@ -108,6 +167,9 @@ data class AppState(
     val shiftTemplates: List<ShiftTemplate> = defaultShiftTemplates(),
     val availability: List<Availability> = emptyList(),
     val weeklyAvailability: List<WeeklyAvailability> = emptyList(),
+    val absences: List<Absence> = emptyList(),
+    val responsibilities: List<ResponsibilityRule> = emptyList(),
+    val personMarkers: List<PersonDayMarker> = emptyList(),
     val dayNotes: List<DayNote> = emptyList(),
     val assignments: List<Assignment> = emptyList(),
     val assignmentHistory: List<Assignment> = emptyList(),

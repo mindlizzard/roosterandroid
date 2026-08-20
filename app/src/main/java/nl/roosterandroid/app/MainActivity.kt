@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Group
@@ -141,6 +142,44 @@ class AppController(private val storage: ScheduleStorage) {
         ), "Vaste weekregel verwijderd")
     }
 
+    fun upsertAbsence(absence: Absence) {
+        val start = runCatching { LocalDate.parse(absence.startDate) }.getOrNull()
+        val end = runCatching { LocalDate.parse(absence.endDate) }.getOrNull()
+        if (start == null || end == null || end.isBefore(start)) {
+            status = "Ongeldige afwezigheidsperiode"
+            return
+        }
+        val updated = state.absences.filterNot { it.id == absence.id } + absence
+        val keepAssignments = state.assignments.filterNot { a ->
+            if (a.employeeId != absence.employeeId) return@filterNot false
+            val d = runCatching { LocalDate.parse(a.date) }.getOrNull() ?: return@filterNot false
+            !d.isBefore(start) && !d.isAfter(end)
+        }
+        commit(state.copy(absences = updated, assignments = keepAssignments), "${absence.type.name.lowercase()} opgeslagen")
+    }
+
+    fun removeAbsence(id: String) {
+        commit(state.copy(absences = state.absences.filterNot { it.id == id }), "Afwezigheid verwijderd")
+    }
+
+    fun upsertResponsibility(rule: ResponsibilityRule) {
+        val updated = state.responsibilities.filterNot { it.id == rule.id } + rule
+        commit(state.copy(responsibilities = updated), "Vaste verantwoordelijkheid opgeslagen")
+    }
+
+    fun removeResponsibility(id: String) {
+        commit(state.copy(responsibilities = state.responsibilities.filterNot { it.id == id }), "Verantwoordelijkheid verwijderd")
+    }
+
+    fun upsertPersonMarker(marker: PersonDayMarker) {
+        val updated = state.personMarkers.filterNot { it.id == marker.id } + marker
+        commit(state.copy(personMarkers = updated), "Marker opgeslagen")
+    }
+
+    fun removePersonMarker(id: String) {
+        commit(state.copy(personMarkers = state.personMarkers.filterNot { it.id == id }), "Marker verwijderd")
+    }
+
     fun upsertDayNote(date: String, text: String) {
         val clean = text.trim()
         val keep = state.dayNotes.filterNot { it.date == date }
@@ -156,6 +195,11 @@ class AppController(private val storage: ScheduleStorage) {
         }
         if (templateId == null) {
             commit(state.copy(assignments = without), "Dienst op vrij gezet")
+            return
+        }
+
+        manualBlockReason(employeeId, date, templateId)?.let {
+            status = "Niet opgeslagen: $it"
             return
         }
 
@@ -178,6 +222,80 @@ class AppController(private val storage: ScheduleStorage) {
         commit(proposed, "Handmatige dienst opgeslagen")
     }
 
+    fun swapAssignments(date: String, firstEmployeeId: String, secondEmployeeId: String) {
+        if (firstEmployeeId == secondEmployeeId) {
+            status = "Kies twee verschillende managers"
+            return
+        }
+        val parsed = runCatching { LocalDate.parse(date) }.getOrNull()
+        if (parsed == null) {
+            status = "Controleer datum"
+            return
+        }
+        val first = state.assignments.lastOrNull { it.employeeId == firstEmployeeId && it.date == date }
+        val second = state.assignments.lastOrNull { it.employeeId == secondEmployeeId && it.date == date }
+        if (first == null && second == null) {
+            status = "Geen diensten om te ruilen op $date"
+            return
+        }
+
+        if (first != null) manualBlockReason(secondEmployeeId, date, first.shiftTemplateId)?.let {
+            status = "Ruil niet mogelijk: $it"
+            return
+        }
+        if (second != null) manualBlockReason(firstEmployeeId, date, second.shiftTemplateId)?.let {
+            status = "Ruil niet mogelijk: $it"
+            return
+        }
+
+        val keep = state.assignments.filterNot {
+            it.date == date && (it.employeeId == firstEmployeeId || it.employeeId == secondEmployeeId)
+        }
+        val swapped = buildList {
+            if (first != null) add(Assignment(employeeId = secondEmployeeId, date = date, shiftTemplateId = first.shiftTemplateId, source = "manual-swap"))
+            if (second != null) add(Assignment(employeeId = firstEmployeeId, date = date, shiftTemplateId = second.shiftTemplateId, source = "manual-swap"))
+        }
+        val proposed = state.copy(assignments = keep + swapped)
+        val baselineKeys = validator.validate(state)
+            .filter { it.severity == AtwValidator.Severity.ERROR && it.employeeId in setOf(firstEmployeeId, secondEmployeeId) }
+            .map { "${it.employeeId}|${it.date}|${it.rule}|${it.message}" }.toSet()
+        val newErrors = validator.validate(proposed)
+            .filter { it.severity == AtwValidator.Severity.ERROR && it.employeeId in setOf(firstEmployeeId, secondEmployeeId) }
+            .filter { "${it.employeeId}|${it.date}|${it.rule}|${it.message}" !in baselineKeys }
+        if (newErrors.isNotEmpty()) {
+            status = "Ruil niet mogelijk: ${newErrors.first().message}"
+            return
+        }
+        commit(proposed, "Diensten geruild")
+    }
+
+    private fun manualBlockReason(employeeId: String, date: String, templateId: String): String? {
+        val employee = state.employees.firstOrNull { it.id == employeeId } ?: return "manager niet gevonden"
+        val template = state.shiftTemplates.firstOrNull { it.id == templateId } ?: return "dienst niet gevonden"
+        val d = runCatching { LocalDate.parse(date) }.getOrNull() ?: return "ongeldige datum"
+        state.absences.firstOrNull { it.employeeId == employeeId && it.includes(d) }?.let {
+            return "${employee.name} heeft ${it.type.name.lowercase()}"
+        }
+        if (!employee.canWork(template.kind)) return "${employee.name} mag ${shiftKindLabel(template.kind)} niet werken"
+        val specific = state.availability.lastOrNull { it.employeeId == employeeId && it.date == date }
+        val weekly = state.weeklyAvailability.lastOrNull { it.employeeId == employeeId && it.weekday == d.dayOfWeek.value }
+        if (!(specific?.available ?: weekly?.available ?: true)) return "${employee.name} is niet beschikbaar"
+        val fixedKind = specific?.fixedShiftKind ?: weekly?.fixedShiftKind
+        if (fixedKind != null && fixedKind != template.kind) return "${employee.name} heeft die dag een andere vaste dienst"
+        val earliest = (specific?.earliestStart ?: weekly?.earliestStart)?.let { runCatching { java.time.LocalTime.parse(it) }.getOrNull() }
+        val latest = (specific?.latestEnd ?: weekly?.latestEnd)?.let { runCatching { java.time.LocalTime.parse(it) }.getOrNull() }
+        if (earliest != null && template.startTime().isBefore(earliest)) return "dienst begint vóór beschikbaarheid van ${employee.name}"
+        if (latest != null) {
+            val startDt = d.atTime(template.startTime())
+            var endDt = d.atTime(template.endTime())
+            if (!endDt.isAfter(startDt)) endDt = endDt.plusDays(1)
+            var latestDt = d.atTime(latest)
+            if (!latestDt.isAfter(startDt)) latestDt = latestDt.plusDays(1)
+            if (endDt.isAfter(latestDt)) return "dienst eindigt na beschikbaarheid van ${employee.name}"
+        }
+        return null
+    }
+
     fun updateTemplate(template: ShiftTemplate) {
         commit(state.copy(shiftTemplates = state.shiftTemplates.map { if (it.id == template.id) template else it }))
     }
@@ -190,7 +308,10 @@ class AppController(private val storage: ScheduleStorage) {
             assignments = keepAssignments,
             assignmentHistory = keepHistory,
             availability = state.availability.filterNot { it.employeeId == id },
-            weeklyAvailability = state.weeklyAvailability.filterNot { it.employeeId == id }
+            weeklyAvailability = state.weeklyAvailability.filterNot { it.employeeId == id },
+            absences = state.absences.filterNot { it.employeeId == id },
+            responsibilities = state.responsibilities.filterNot { it.employeeId == id },
+            personMarkers = state.personMarkers.filterNot { it.employeeId == id }
         ))
     }
 
@@ -244,7 +365,7 @@ class AppController(private val storage: ScheduleStorage) {
     private fun assignmentMonth(a: Assignment): YearMonth? = runCatching { YearMonth.from(LocalDate.parse(a.date)) }.getOrNull()
 }
 
-private enum class AppTab(val label: String) { OVERZICHT("Overzicht"), TEAM("Team"), ROOSTER("Rooster"), REGELS("Regels") }
+private enum class AppTab(val label: String) { OVERZICHT("Overzicht"), TEAM("Team"), ROOSTER("Rooster"), ADMIN("Admin"), REGELS("Regels") }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -289,6 +410,7 @@ fun RoosterApp(controller: AppController) {
                         AppTab.OVERZICHT -> Icons.Default.Home
                         AppTab.TEAM -> Icons.Default.Group
                         AppTab.ROOSTER -> Icons.Default.CalendarMonth
+                        AppTab.ADMIN -> Icons.Default.BarChart
                         AppTab.REGELS -> Icons.Default.Settings
                     }
                     NavigationBarItem(
@@ -317,6 +439,7 @@ fun RoosterApp(controller: AppController) {
                 AppTab.OVERZICHT -> OverviewScreen(controller)
                 AppTab.TEAM -> TeamScreen(controller)
                 AppTab.ROOSTER -> ScheduleScreen(controller)
+                AppTab.ADMIN -> AdminScreen(controller)
                 AppTab.REGELS -> RulesScreen(
                     controller = controller,
                     onExport = { exportLauncher.launch("roosterandroid-${controller.state.year}-${controller.state.month}.json") },
@@ -915,41 +1038,50 @@ private fun ScheduleScreen(controller: AppController) {
                             }
                             val explicitAvailability =
                                 controller.state.availability.lastOrNull {
-                                    it.employeeId == employee.id &&
-                                        it.date == dateString
+                                    it.employeeId == employee.id && it.date == dateString
                                 }
                             val weeklyAvailability =
                                 controller.state.weeklyAvailability.lastOrNull {
-                                    it.employeeId == employee.id &&
-                                        it.weekday == date.dayOfWeek.value
+                                    it.employeeId == employee.id && it.weekday == date.dayOfWeek.value
                                 }
+                            val absence = controller.state.absences.lastOrNull {
+                                it.employeeId == employee.id && it.includes(date)
+                            }
                             val unavailable =
                                 explicitAvailability?.available == false ||
-                                    (
-                                        explicitAvailability == null &&
-                                            weeklyAvailability?.available == false
-                                    )
+                                    (explicitAvailability == null && weeklyAvailability?.available == false)
 
                             val conflict = controller.violations.any {
                                 it.severity == AtwValidator.Severity.ERROR &&
-                                    it.employeeId == employee.id &&
-                                    it.date == date
+                                    it.employeeId == employee.id && it.date == date
                             }
 
+                            val taskLabels = controller.state.responsibilities
+                                .filter { it.active && it.employeeId == employee.id && responsibilityAppliesUi(it, date, ym) }
+                                .map(::responsibilityLabelUi)
+                            val markerLabels = controller.state.personMarkers
+                                .filter { it.employeeId == employee.id && it.date == dateString }
+                                .map(::personMarkerLabelUi)
+                            val extras = (taskLabels + markerLabels).distinct()
+
                             val text = when {
-                                assignment != null && template != null ->
-                                    matrixShiftLabel(template, assignment.source)
+                                absence != null -> absenceMatrixLabel(absence)
+                                assignment != null && template != null -> {
+                                    val base = matrixShiftLabel(template, assignment.source)
+                                    if (extras.isEmpty()) base else base + "\n" + extras.joinToString(" / ")
+                                }
                                 unavailable -> "Niet\nbesch."
+                                extras.isNotEmpty() -> extras.joinToString("\n")
                                 else -> "Vrij"
                             }
 
                             val color = when {
                                 conflict -> MatrixColors.Error
+                                absence != null -> absenceColor(absence.type)
                                 unavailable -> MatrixColors.Unavailable
                                 template != null -> shiftColor(template.kind)
-                                else ->
-                                    if (weekend) MatrixColors.FreeWeekend
-                                    else MatrixColors.Free
+                                extras.isNotEmpty() -> MatrixColors.Present
+                                else -> if (weekend) MatrixColors.FreeWeekend else MatrixColors.Free
                             }
 
                             MatrixCell(
@@ -990,6 +1122,10 @@ private object MatrixColors {
     val Free = Color(0xFFF7F7F7)
     val FreeWeekend = Color(0xFFEEEEF1)
     val Unavailable = Color(0xFFF6D7D7)
+    val Vacation = Color(0xFFD9F0FF)
+    val Leave = Color(0xFFFFE7B8)
+    val Sick = Color(0xFFF9CFCF)
+    val Present = Color(0xFFE0F3E8)
     val Error = Color(0xFFFFC9C9)
     val RmHeader = Color(0xFFD1E6FF)
     val TraineeHeader = Color(0xFFFFE2C6)
@@ -1061,10 +1197,53 @@ private fun matrixShiftLabel(
         ShiftKind.KPI -> "KPI"
         ShiftKind.CUSTOM -> template.name.take(3).uppercase()
     }
-    val lock = if (source == "manual") " 🔒" else ""
+    val lock = if (source.startsWith("manual")) " 🔒" else ""
     val start = template.start.removeSuffix(":00")
     val end = template.end.removeSuffix(":00")
     return "$code$lock\n$start-$end"
+}
+
+private fun absenceMatrixLabel(absence: Absence): String = when (absence.type) {
+    AbsenceType.VACATION -> "Vakantie"
+    AbsenceType.LEAVE -> "Verlof"
+    AbsenceType.SICK -> "Ziek"
+    AbsenceType.OTHER -> "Afwezig"
+}
+
+private fun absenceColor(type: AbsenceType): Color = when (type) {
+    AbsenceType.VACATION -> MatrixColors.Vacation
+    AbsenceType.LEAVE -> MatrixColors.Leave
+    AbsenceType.SICK -> MatrixColors.Sick
+    AbsenceType.OTHER -> MatrixColors.Unavailable
+}
+
+private fun responsibilityAppliesUi(rule: ResponsibilityRule, date: LocalDate, ym: YearMonth): Boolean = when (rule.recurrence) {
+    RecurrenceType.WEEKLY -> date.dayOfWeek.value == rule.weekday
+    RecurrenceType.MONTH_END -> date == ym.atEndOfMonth()
+}
+
+private fun responsibilityLabelUi(rule: ResponsibilityRule): String = rule.label.ifBlank {
+    when (rule.type) {
+        ResponsibilityType.WEEK_COUNT -> "Weektelling"
+        ResponsibilityType.MONTH_COUNT -> "Maandtelling"
+        ResponsibilityType.MAINTENANCE -> "Onderhoud"
+        ResponsibilityType.ADMIN -> "Admin"
+        ResponsibilityType.KPI -> "KPI"
+        ResponsibilityType.HAVI -> "HAVI"
+        ResponsibilityType.PRESENT -> "Aanwezig"
+        ResponsibilityType.OTHER -> "Taak"
+    }
+}
+
+private fun personMarkerLabelUi(marker: PersonDayMarker): String {
+    val base = when (marker.type) {
+        PersonMarkerType.PRESENT -> "Aanwezig"
+        PersonMarkerType.OFFICE -> "Kantoor"
+        PersonMarkerType.TRAINING -> "Training"
+        PersonMarkerType.MEETING -> "Meeting"
+        PersonMarkerType.OTHER -> "Marker"
+    }
+    return if (marker.note.isBlank()) base else "$base: ${marker.note}"
 }
 
 private fun buildDayDetails(
@@ -1074,33 +1253,32 @@ private fun buildDayDetails(
 ): String {
     val parts = mutableListOf<String>()
     controller.state.dayNotes.firstOrNull { it.date == date.toString() }
-        ?.text
-        ?.takeIf { it.isNotBlank() }
-        ?.let { parts += it }
+        ?.text?.takeIf { it.isNotBlank() }?.let { parts += it }
+
+    val rules = controller.state.responsibilities.filter {
+        it.active && responsibilityAppliesUi(it, date, ym)
+    }
+    rules.forEach { rule ->
+        val name = controller.state.employees.firstOrNull { it.id == rule.employeeId }?.name ?: "?"
+        parts += "${responsibilityLabelUi(rule)}: $name"
+    }
+
+    controller.state.personMarkers.filter { it.date == date.toString() }.forEach { marker ->
+        val name = controller.state.employees.firstOrNull { it.id == marker.employeeId }?.name ?: "?"
+        parts += "${personMarkerLabelUi(marker)}: $name"
+    }
 
     val settings = controller.state.settings
-
-    if (settings.showMonthCountOnLastDay && date == ym.atEndOfMonth()) {
+    val hasMonthCounter = rules.any { it.type == ResponsibilityType.MONTH_COUNT }
+    val hasWeekCounter = rules.any { it.type == ResponsibilityType.WEEK_COUNT }
+    if (settings.showMonthCountOnLastDay && date == ym.atEndOfMonth() && !hasMonthCounter) {
         parts += "Maandtelling"
-    } else if (
-        settings.showWeeklyCount &&
-        date.dayOfWeek.value == settings.weekCountWeekday
-    ) {
+    } else if (settings.showWeeklyCount && date.dayOfWeek.value == settings.weekCountWeekday && !hasWeekCounter) {
         parts += "Weektelling"
     }
 
-    if (date.dayOfWeek.value in settings.busyWeekdays) {
-        parts += "Drukke dag"
-    }
-
-    if (controller.violations.any {
-            it.severity == AtwValidator.Severity.ERROR &&
-                it.date == date
-        }
-    ) {
-        parts += "⚠ ATW"
-    }
-
+    if (date.dayOfWeek.value in settings.busyWeekdays) parts += "Drukke dag"
+    if (controller.violations.any { it.severity == AtwValidator.Severity.ERROR && it.date == date }) parts += "⚠ ATW"
     return parts.distinct().joinToString(" • ")
 }
 
@@ -1112,7 +1290,7 @@ private fun MatrixLegend() {
     ) {
         Text("Kleuren", fontWeight = FontWeight.Bold)
         Text("SET setup • DAG dag • TUS tussen • SLU sluit • KPI vaste KPI-taak")
-        Text("Groen setup • blauw dag • oranje tussen • paars sluit • turquoise KPI • rood conflict/niet beschikbaar")
+        Text("Groen setup • blauw dag • oranje tussen • paars sluit • turquoise KPI • lichtblauw vakantie • geel verlof • rood ziek/conflict • mint aanwezig/taak")
         Text(
             "🔒 = handmatig vastgezet en blijft staan bij opnieuw genereren",
             style = MaterialTheme.typography.bodySmall
@@ -1153,6 +1331,9 @@ private fun RulesScreen(controller: AppController, onExport: () -> Unit, onImpor
                 }
                 SettingSwitch("Maandtelling op laatste dag", s.showMonthCountOnLastDay) {
                     controller.updateSettings(s.copy(showMonthCountOnLastDay = it))
+                }
+                SettingSwitch("Waarschuw bij minder dan 13 vrije zondagen/jaar", s.warnMinimumFreeSundays) {
+                    controller.updateSettings(s.copy(warnMinimumFreeSundays = it))
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("Sluitmanagers bij maandsluiting", modifier = Modifier.weight(1f))

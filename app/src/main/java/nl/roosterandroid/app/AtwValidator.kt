@@ -33,8 +33,7 @@ class AtwValidator {
         if (!state.settings.atwEnabled) return emptyList()
         val employees = state.employees.associateBy { it.id }
         val templates = state.shiftTemplates.associateBy { it.id }
-        val allAssignments = (state.assignmentHistory + state.assignments)
-            .distinctBy { it.id }
+        val allAssignments = (state.assignmentHistory + state.assignments).distinctBy { it.id }
 
         val shifts = allAssignments.mapNotNull { a ->
             val employee = employees[a.employeeId] ?: return@mapNotNull null
@@ -52,9 +51,11 @@ class AtwValidator {
             checkWeeklyRest(sorted, out)
             checkNightRules(sorted, state.settings, out)
             checkConsecutiveDays(sorted, state.settings, out)
+            checkSundayRest(sorted, state.settings, out)
             checkHistoryCoverage(sorted, state, employeeId, out)
         }
-        return out.sortedWith(compareBy<Violation>({ it.date ?: LocalDate.MIN }, { it.severity.ordinal }))
+        return out.distinctBy { "${it.employeeId}|${it.date}|${it.rule}|${it.message}" }
+            .sortedWith(compareBy<Violation>({ it.date ?: LocalDate.MIN }, { it.severity.ordinal }))
     }
 
     fun canPlace(
@@ -82,8 +83,9 @@ class AtwValidator {
 
         val monday = date.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
         val sundayExclusive = monday.plusDays(7)
-        val weekHours = relevant.filter { !it.start.toLocalDate().isBefore(monday) && it.start.toLocalDate().isBefore(sundayExclusive) }
-            .sumOf { it.durationHours }
+        val weekHours = relevant.filter {
+            !it.start.toLocalDate().isBefore(monday) && it.start.toLocalDate().isBefore(sundayExclusive)
+        }.sumOf { it.durationHours }
         if (weekHours > 60.0) return false
 
         val days = relevant.map { it.date }.distinct().sorted()
@@ -113,7 +115,12 @@ class AtwValidator {
         }
     }
 
-    private fun checkOverlapAndDailyRest(shifts: List<ScheduledShift>, settings: PlannerSettings, out: MutableList<Violation>) {
+    private fun checkOverlapAndDailyRest(
+        shifts: List<ScheduledShift>,
+        settings: PlannerSettings,
+        out: MutableList<Violation>
+    ) {
+        val reducedStarts = mutableListOf<LocalDateTime>()
         for (i in 0 until shifts.lastIndex) {
             val a = shifts[i]
             val b = shifts[i + 1]
@@ -124,14 +131,22 @@ class AtwValidator {
             val restMinutes = Duration.between(a.end, b.start).toMinutes()
             val normalMin = settings.strictDailyRestHours * 60L
             if (restMinutes < normalMin) {
-                val reducedAllowed = settings.allowOneReducedDailyRestPer7Days && restMinutes >= 8 * 60L
+                val previousReductionIn7Days = reducedStarts.any { prior ->
+                    !prior.isAfter(b.start) && Duration.between(prior, b.start).toHours() < 168
+                }
+                val reductionPossible = settings.allowOneReducedDailyRestPer7Days &&
+                    restMinutes >= 8 * 60L && !previousReductionIn7Days
+                if (reductionPossible) reducedStarts += b.start
                 out += Violation(
-                    if (reducedAllowed) Severity.WARNING else Severity.ERROR,
+                    if (reductionPossible) Severity.WARNING else Severity.ERROR,
                     a.employee.id,
                     b.date,
                     "Dagelijkse rust",
-                    if (reducedAllowed) "${a.employee.name}: rust is %.1f uur. Dit gebruikt mogelijk de 1× per 7 dagen toegestane verkorting tot minimaal 8 uur.".format(restMinutes / 60.0)
-                    else "${a.employee.name}: slechts %.1f uur rust tussen diensten; minimaal %d uur ingesteld.".format(restMinutes / 60.0, settings.strictDailyRestHours)
+                    if (reductionPossible) {
+                        "${a.employee.name}: rust is %.1f uur. Dit gebruikt de maximaal 1× per 7 dagen toegestane verkorting tot minimaal 8 uur; alleen gebruiken als het werk dit noodzakelijk maakt.".format(restMinutes / 60.0)
+                    } else {
+                        "${a.employee.name}: slechts %.1f uur rust tussen diensten; minimaal %d uur, met hooguit 1 geldige verkorting per 7 dagen.".format(restMinutes / 60.0, settings.strictDailyRestHours)
+                    }
                 )
             }
         }
@@ -168,27 +183,40 @@ class AtwValidator {
     private fun checkWeeklyRest(shifts: List<ScheduledShift>, out: MutableList<Violation>) {
         if (shifts.size < 2) return
         val employee = shifts.first().employee
-        val firstMonday = shifts.first().date.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
-        val lastDate = shifts.last().date
-        var weekStart = firstMonday
-        while (!weekStart.isAfter(lastDate)) {
-            val weekEnd = weekStart.plusDays(7)
-            val gaps7 = restGaps(shifts, weekStart.atStartOfDay(), weekEnd.atStartOfDay())
-            if (gaps7.maxOrNull() ?: 168.0 < 36.0) {
-                val fortnightEnd = weekStart.plusDays(14)
-                val gaps14 = restGaps(shifts, weekStart.atStartOfDay(), fortnightEnd.atStartOfDay()).filter { it >= 32.0 }
-                if (gaps14.size < 2 || gaps14.sortedDescending().take(2).sum() < 72.0) {
-                    out += Violation(Severity.ERROR, employee.id, weekStart, "Wekelijkse rust", "${employee.name}: geen 36 uur aaneengesloten rust in 7 dagen en ook geen geldige 72-uursvariant over 14 dagen gevonden.")
+        var cursor = shifts.first().date
+        val last = shifts.last().date
+        var lastReported: LocalDate? = null
+        while (!cursor.isAfter(last)) {
+            val gaps7 = restGaps(shifts, cursor.atStartOfDay(), cursor.plusDays(7).atStartOfDay())
+            val has36 = (gaps7.maxOrNull() ?: 168.0) >= 36.0
+            if (!has36) {
+                val gaps14 = restGaps(shifts, cursor.atStartOfDay(), cursor.plusDays(14).atStartOfDay())
+                    .filter { it >= 32.0 }
+                val alternativeOk = gaps14.size >= 2 && gaps14.sortedDescending().take(2).sum() >= 72.0
+                if (!alternativeOk && (lastReported == null || cursor.isAfter(lastReported!!.plusDays(6)))) {
+                    out += Violation(
+                        Severity.ERROR,
+                        employee.id,
+                        cursor,
+                        "Wekelijkse rust",
+                        "${employee.name}: in deze 7-daagse periode ontbreekt 36 uur aaneengesloten rust en ook de 72-uursvariant over 14 dagen (2 periodes van minimaal 32 uur) is niet geldig."
+                    )
+                    lastReported = cursor
                 }
             }
-            weekStart = weekStart.plusDays(7)
+            cursor = cursor.plusDays(1)
         }
     }
 
-    private fun checkNightRules(shifts: List<ScheduledShift>, settings: PlannerSettings, out: MutableList<Violation>) {
+    private fun checkNightRules(
+        shifts: List<ScheduledShift>,
+        settings: PlannerSettings,
+        out: MutableList<Violation>
+    ) {
         val nights = shifts.filter { nightMinutes(it) > 60 }
         if (nights.isEmpty()) return
         val employee = shifts.first().employee
+
         nights.forEach { s ->
             val maxHours = if (settings.allowIncidentalTwelveHourNightShift) 12.0 else 10.0
             if (s.durationHours > maxHours) {
@@ -196,11 +224,31 @@ class AtwValidator {
             }
             val next = shifts.firstOrNull { it.start.isAfter(s.start) }
             if (next != null) {
-                val required = if (s.end.toLocalTime().isAfter(LocalTime.of(2, 0))) 14 else 11
                 val rest = Duration.between(s.end, next.start).toMinutes() / 60.0
-                if (rest < required) {
-                    val reduced = settings.allowOneReducedDailyRestPer7Days && rest >= 8.0
-                    out += Violation(if (reduced) Severity.WARNING else Severity.ERROR, employee.id, next.date, "Rust na nachtdienst", "${employee.name}: %.1f uur rust na nachtdienst; normaal minimaal %d uur.".format(rest, required))
+                if (s.durationHours > 10.0 && rest < 12.0) {
+                    out += Violation(
+                        Severity.ERROR,
+                        employee.id,
+                        next.date,
+                        "Rust na lange nachtdienst",
+                        "${employee.name}: na een incidentele nachtdienst langer dan 10 uur is minimaal 12 uur rust nodig; gepland %.1f uur.".format(rest)
+                    )
+                }
+
+                if (s.end.toLocalTime().isAfter(LocalTime.of(2, 0)) && rest < 14.0) {
+                    val previousReduction = hasPriorReducedRest(shifts, next.start)
+                    val canReduce = settings.allowOneReducedDailyRestPer7Days && rest >= 8.0 && !previousReduction && s.durationHours <= 10.0
+                    out += Violation(
+                        if (canReduce) Severity.WARNING else Severity.ERROR,
+                        employee.id,
+                        next.date,
+                        "Rust na nachtdienst",
+                        if (canReduce) {
+                            "${employee.name}: %.1f uur rust na nachtdienst die na 02:00 eindigt. Dit gebruikt de maximaal 1× per 7 dagen toegestane verkorting tot minimaal 8 uur.".format(rest)
+                        } else {
+                            "${employee.name}: %.1f uur rust na nachtdienst die na 02:00 eindigt; normaal minimaal 14 uur.".format(rest)
+                        }
+                    )
                 }
             }
         }
@@ -225,11 +273,15 @@ class AtwValidator {
         var seriesStart = 0
         while (seriesStart < nights.size) {
             var seriesEnd = seriesStart
-            while (seriesEnd + 1 < nights.size && nights[seriesEnd + 1].date == nights[seriesEnd].date.plusDays(1)) seriesEnd++
+            while (seriesEnd + 1 < nights.size && nights[seriesEnd + 1].date == nights[seriesEnd].date.plusDays(1)) {
+                seriesEnd++
+            }
             val seriesLength = seriesEnd - seriesStart + 1
             if (seriesLength >= 3) {
                 val lastNight = nights[seriesEnd]
-                val nextAfterSeries = shifts.firstOrNull { it.start.isAfter(lastNight.start) && it !in nights.subList(seriesStart, seriesEnd + 1) }
+                val nextAfterSeries = shifts.firstOrNull {
+                    it.start.isAfter(lastNight.start) && it !in nights.subList(seriesStart, seriesEnd + 1)
+                }
                 if (nextAfterSeries != null) {
                     val rest = Duration.between(lastNight.end, nextAfterSeries.start).toMinutes() / 60.0
                     if (rest < 46.0) {
@@ -241,11 +293,17 @@ class AtwValidator {
         }
 
         nights.groupBy { it.date.year }.forEach { (year, yearNights) ->
-            if (yearNights.size > 140) out += Violation(Severity.ERROR, employee.id, LocalDate.of(year, 1, 1), "Jaarmaximum nachtdiensten", "${employee.name}: ${yearNights.size} nachtdiensten in $year; algemene grens is 140.")
+            if (yearNights.size > 140) {
+                out += Violation(Severity.ERROR, employee.id, LocalDate.of(year, 1, 1), "Jaarmaximum nachtdiensten", "${employee.name}: ${yearNights.size} nachtdiensten in $year; algemene grens is 140.")
+            }
             val longNights = yearNights.filter { it.durationHours > 10.0 }
-            if (longNights.size > 22) out += Violation(Severity.ERROR, employee.id, LocalDate.of(year, 1, 1), "12-uurs nachtdiensten", "${employee.name}: meer dan 22 incidentele nachtdiensten langer dan 10 uur in $year.")
+            if (longNights.size > 22) {
+                out += Violation(Severity.ERROR, employee.id, LocalDate.of(year, 1, 1), "12-uurs nachtdiensten", "${employee.name}: meer dan 22 incidentele nachtdiensten langer dan 10 uur in $year.")
+            }
             longNights.forEach { longNight ->
-                val count14 = longNights.count { !it.date.isBefore(longNight.date) && it.date.isBefore(longNight.date.plusDays(14)) }
+                val count14 = longNights.count {
+                    !it.date.isBefore(longNight.date) && it.date.isBefore(longNight.date.plusDays(14))
+                }
                 if (count14 > 5) {
                     out += Violation(Severity.ERROR, employee.id, longNight.date, "12-uurs nachtdiensten per 2 weken", "${employee.name}: $count14 incidentele lange nachtdiensten in 14 dagen; algemene grens is 5.")
                 }
@@ -266,7 +324,24 @@ class AtwValidator {
         }
     }
 
-    private fun checkConsecutiveDays(shifts: List<ScheduledShift>, settings: PlannerSettings, out: MutableList<Violation>) {
+    private fun hasPriorReducedRest(shifts: List<ScheduledShift>, before: LocalDateTime): Boolean {
+        val windowStart = before.minusHours(168)
+        for (i in 0 until shifts.lastIndex) {
+            val a = shifts[i]
+            val b = shifts[i + 1]
+            if (!b.start.isBefore(before) || b.start.isBefore(windowStart)) continue
+            val rest = Duration.between(a.end, b.start).toMinutes() / 60.0
+            val nightAfter2 = nightMinutes(a) > 60 && a.end.toLocalTime().isAfter(LocalTime.of(2, 0))
+            if (rest >= 8.0 && (rest < 11.0 || (nightAfter2 && rest < 14.0))) return true
+        }
+        return false
+    }
+
+    private fun checkConsecutiveDays(
+        shifts: List<ScheduledShift>,
+        settings: PlannerSettings,
+        out: MutableList<Violation>
+    ) {
         val days = shifts.map { it.date }.distinct().sorted()
         if (days.isEmpty()) return
         var start = 0
@@ -287,7 +362,49 @@ class AtwValidator {
         }
     }
 
-    private fun checkHistoryCoverage(shifts: List<ScheduledShift>, state: AppState, employeeId: String, out: MutableList<Violation>) {
+    private fun checkSundayRest(
+        shifts: List<ScheduledShift>,
+        settings: PlannerSettings,
+        out: MutableList<Violation>
+    ) {
+        if (!settings.warnMinimumFreeSundays || shifts.isEmpty()) return
+        val employee = shifts.first().employee
+        val first = shifts.first().date
+        val last = shifts.last().date
+        if (Duration.between(first.atStartOfDay(), last.atStartOfDay()).toDays() < 350) return
+
+        var start = first
+        while (!start.plusDays(364).isAfter(last)) {
+            val workedSundays = shifts.asSequence()
+                .map { it.date }
+                .filter { !it.isBefore(start) && it.isBefore(start.plusDays(364)) }
+                .filter { it.dayOfWeek == DayOfWeek.SUNDAY }
+                .distinct()
+                .count()
+            val totalSundays = generateSequence(start.with(TemporalAdjusters.nextOrSame(DayOfWeek.SUNDAY))) { it.plusWeeks(1) }
+                .takeWhile { it.isBefore(start.plusDays(364)) }
+                .count()
+            val free = totalSundays - workedSundays
+            if (free < 13) {
+                out += Violation(
+                    Severity.WARNING,
+                    employee.id,
+                    start,
+                    "Vrije zondagen",
+                    "${employee.name}: $free vrije zondagen in ongeveer 52 weken. De algemene norm is 13; minder kan alleen onder geldige collectieve afspraken en individuele instemming."
+                )
+                return
+            }
+            start = start.plusWeeks(4)
+        }
+    }
+
+    private fun checkHistoryCoverage(
+        shifts: List<ScheduledShift>,
+        state: AppState,
+        employeeId: String,
+        out: MutableList<Violation>
+    ) {
         val monthStart = LocalDate.of(state.year, state.month, 1)
         val first = shifts.minOfOrNull { it.date } ?: return
         if (first.isAfter(monthStart.minusDays(111))) {
@@ -341,5 +458,10 @@ class AtwValidator {
         return best
     }
 
-    private fun overlaps(aStart: LocalDateTime, aEnd: LocalDateTime, bStart: LocalDateTime, bEnd: LocalDateTime): Boolean = aStart < bEnd && bStart < aEnd
+    private fun overlaps(
+        aStart: LocalDateTime,
+        aEnd: LocalDateTime,
+        bStart: LocalDateTime,
+        bEnd: LocalDateTime
+    ): Boolean = aStart < bEnd && bStart < aEnd
 }
