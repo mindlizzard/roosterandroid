@@ -289,12 +289,14 @@ class AppController(private val storage: ScheduleStorage) {
         if (!employee.canWork(template.kind)) return "${employee.name} mag ${shiftKindLabel(template.kind)} niet werken"
         val specific = state.availability.lastOrNull { it.employeeId == employeeId && it.date == date }
         val weekly = state.weeklyAvailability.lastOrNull { it.employeeId == employeeId && it.weekday == d.dayOfWeek.value }
-        val availabilityRule = specific ?: weekly
-        if (!(availabilityRule?.available ?: true)) return "${employee.name} is niet beschikbaar"
-        val fixedKind = availabilityRule?.fixedShiftKind
+        val available = if (specific != null) specific.available else weekly?.available ?: true
+        if (!available) return "${employee.name} is niet beschikbaar"
+        val fixedKind = if (specific != null) specific.fixedShiftKind else weekly?.fixedShiftKind
         if (fixedKind != null && fixedKind != template.kind) return "${employee.name} heeft die dag een andere vaste dienst"
-        val earliest = availabilityRule?.earliestStart?.let { runCatching { java.time.LocalTime.parse(it) }.getOrNull() }
-        val latest = availabilityRule?.latestEnd?.let { runCatching { java.time.LocalTime.parse(it) }.getOrNull() }
+        val earliestText = if (specific != null) specific.earliestStart else weekly?.earliestStart
+        val latestText = if (specific != null) specific.latestEnd else weekly?.latestEnd
+        val earliest = earliestText?.let { runCatching { java.time.LocalTime.parse(it) }.getOrNull() }
+        val latest = latestText?.let { runCatching { java.time.LocalTime.parse(it) }.getOrNull() }
         if (earliest != null && template.startTime().isBefore(earliest)) return "dienst begint vóór beschikbaarheid van ${employee.name}"
         if (latest != null) {
             val startDt = d.atTime(template.startTime())
@@ -503,6 +505,22 @@ fun RoosterApp(controller: AppController) {
         }
     }
 
+    val pdfLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/pdf")
+    ) { uri ->
+        if (uri != null) {
+            runCatching {
+                context.contentResolver.openOutputStream(uri)?.use { stream ->
+                    RosterPdfExporter.write(controller.state, stream)
+                } ?: error("PDF-bestand kon niet worden geopend")
+            }.onSuccess {
+                controller.showStatus("PDF opgeslagen")
+            }.onFailure {
+                controller.showStatus("PDF opslaan mislukt: ${it.message}")
+            }
+        }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(title = {
@@ -547,7 +565,14 @@ fun RoosterApp(controller: AppController) {
             when (tab) {
                 AppTab.OVERZICHT -> OverviewScreen(controller)
                 AppTab.TEAM -> TeamScreen(controller)
-                AppTab.ROOSTER -> ScheduleScreen(controller)
+                AppTab.ROOSTER -> ScheduleScreen(
+                    controller = controller,
+                    onPrintPdf = {
+                        pdfLauncher.launch(
+                            "rooster-${controller.state.year}-${controller.state.month.toString().padStart(2, '0')}.pdf"
+                        )
+                    }
+                )
                 AppTab.ADMIN -> AdminScreen(controller)
                 AppTab.REGELS -> RulesScreen(
                     controller = controller,
@@ -681,7 +706,8 @@ private fun TeamScreen(controller: AppController) {
                 val selectedEmployee = controller.state.employees[idx]
                 Card(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
                     Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("Afwijking op specifieke datum", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)\n                        Text("Gebruik dit voor een afwijkende vrije dag of werktijd. Deze datumregel gaat volledig voor de vaste weekbeschikbaarheid.", style = MaterialTheme.typography.bodySmall)
+                        Text("Afwijking op specifieke datum", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                        Text("Gebruik dit voor een afwijkende vrije dag of werktijd. Deze datumregel gaat volledig voor de vaste weekbeschikbaarheid.", style = MaterialTheme.typography.bodySmall)
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(selectedEmployee.name, modifier = Modifier.weight(1f))
                             OutlinedButton(onClick = { availabilityEmployeeIndex = (idx + 1) % controller.state.employees.size }) { Text("Volgende") }
@@ -1037,7 +1063,7 @@ private fun CapabilityRow(label: String, checked: Boolean, onChecked: (Boolean) 
 }
 
 @Composable
-private fun ScheduleScreen(controller: AppController) {
+private fun ScheduleScreen(controller: AppController, onPrintPdf: () -> Unit) {
     val ym = YearMonth.of(controller.state.year, controller.state.month)
     val employees = controller.state.employees.filter { it.active }
     val templates = controller.state.shiftTemplates.associateBy { it.id }
@@ -1130,6 +1156,21 @@ private fun ScheduleScreen(controller: AppController) {
 
     LazyColumn(modifier = Modifier.fillMaxSize()) {
         item { MonthHeader(controller) }
+        item {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Button(onClick = onPrintPdf) {
+                    Text("Print / PDF")
+                }
+                Text(
+                    "PDF: pagina 1 rooster, pagina 2 loonadministratie",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+        }
 
         if (controller.state.assignments.isEmpty()) {
             item {
@@ -1154,12 +1195,6 @@ private fun ScheduleScreen(controller: AppController) {
 
                 Row {
                     MatrixCell("Datum", 78.dp, MatrixColors.Header, strong = true)
-                    MatrixCell(
-                        "Bijzonderheden",
-                        146.dp,
-                        MatrixColors.NoteHeader,
-                        strong = true
-                    )
 
                     Row(Modifier.horizontalScroll(managerScroll)) {
                         employees.forEach { employee ->
@@ -1170,6 +1205,12 @@ private fun ScheduleScreen(controller: AppController) {
                                 strong = true
                             )
                         }
+                        MatrixCell(
+                            "Bijzonderheden",
+                            146.dp,
+                            MatrixColors.NoteHeader,
+                            strong = true
+                        )
                     }
                 }
             }
@@ -1198,22 +1239,6 @@ private fun ScheduleScreen(controller: AppController) {
                         cellWidth = 78.dp,
                         containerColor = dateColor,
                         strong = true
-                    )
-
-                    val details = buildDayDetails(controller, date, ym)
-                    MatrixCell(
-                        text = details.ifBlank { " " },
-                        cellWidth = 146.dp,
-                        containerColor =
-                            if (details.contains("⚠")) MatrixColors.Error
-                            else MatrixColors.Note,
-                        onClick = {
-                            noteDate = dateString
-                            noteDraft = controller.state.dayNotes
-                                .firstOrNull { it.date == dateString }
-                                ?.text
-                                .orEmpty()
-                        }
                     )
 
                     Row(Modifier.horizontalScroll(managerScroll)) {
@@ -1285,6 +1310,22 @@ private fun ScheduleScreen(controller: AppController) {
                                 }
                             )
                         }
+
+                        val details = buildDayDetails(controller, date, ym)
+                        MatrixCell(
+                            text = details.ifBlank { " " },
+                            cellWidth = 146.dp,
+                            containerColor =
+                                if (details.contains("⚠")) MatrixColors.Error
+                                else MatrixColors.Note,
+                            onClick = {
+                                noteDate = dateString
+                                noteDraft = controller.state.dayNotes
+                                    .firstOrNull { it.date == dateString }
+                                    ?.text
+                                    .orEmpty()
+                            }
+                        )
                     }
                 }
             }
@@ -1395,6 +1436,7 @@ private fun matrixShiftLabel(
 
 private fun absenceMatrixLabel(absence: Absence): String = when (absence.type) {
     AbsenceType.VACATION -> "Vakantie"
+    AbsenceType.SNIPPER_DAY -> "Snipperdag"
     AbsenceType.LEAVE -> "Verlof"
     AbsenceType.SPECIAL_LEAVE -> "Bijz. verlof"
     AbsenceType.UNPAID_LEAVE -> "Onbet. verlof"
@@ -1409,6 +1451,7 @@ private fun absenceMatrixLabel(absence: Absence): String = when (absence.type) {
 private fun absenceColor(type: AbsenceType): Color = when (type) {
     AbsenceType.VACATION -> MatrixColors.Vacation
     AbsenceType.SICK -> MatrixColors.Sick
+    AbsenceType.SNIPPER_DAY,
     AbsenceType.LEAVE,
     AbsenceType.SPECIAL_LEAVE,
     AbsenceType.UNPAID_LEAVE,
@@ -1502,7 +1545,7 @@ private fun MatrixLegend() {
     ) {
         Text("Kleuren", fontWeight = FontWeight.Bold)
         Text("SET setup • DAG dag • TUS tussen • SLU sluit • KPI vaste KPI-taak")
-        Text("Groen setup • blauw dag • oranje tussen • paars sluit • turquoise KPI • lichtblauw vakantie • geel verlof • rood ziek/conflict • mint aanwezig/taak")
+        Text("Groen setup • blauw dag • oranje tussen • paars sluit • turquoise KPI • lichtblauw vakantie • geel verlof/snipper • rood ziek/conflict • mint aanwezig/taak")
         Text(
             "🔒 = handmatig vastgezet en blijft staan bij opnieuw genereren",
             style = MaterialTheme.typography.bodySmall

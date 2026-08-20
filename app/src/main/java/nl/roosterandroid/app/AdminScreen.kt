@@ -446,6 +446,7 @@ fun responsibilityLabel(type: ResponsibilityType): String = when (type) {
 
 fun absenceLabel(type: AbsenceType): String = when (type) {
     AbsenceType.VACATION -> "Vakantie"
+    AbsenceType.SNIPPER_DAY -> "Snipperdag"
     AbsenceType.LEAVE -> "Verlof"
     AbsenceType.SPECIAL_LEAVE -> "Bijzonder verlof"
     AbsenceType.UNPAID_LEAVE -> "Onbetaald verlof"
@@ -459,6 +460,7 @@ fun absenceLabel(type: AbsenceType): String = when (type) {
 
 fun absenceShort(type: AbsenceType): String = when (type) {
     AbsenceType.VACATION -> "VAK"
+    AbsenceType.SNIPPER_DAY -> "SNIP"
     AbsenceType.LEAVE -> "VER"
     AbsenceType.SPECIAL_LEAVE -> "BV"
     AbsenceType.UNPAID_LEAVE -> "OV"
