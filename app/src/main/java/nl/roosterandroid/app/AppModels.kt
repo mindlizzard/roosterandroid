@@ -13,25 +13,25 @@ enum class EmployeeRole { MANAGER, RM, TRAINEE, BORROWED }
 enum class ShiftKind { SETUP, DAY, MIDDLE, CLOSE, KPI, CUSTOM }
 
 @Serializable
-enum class AbsenceType { VACATION, LEAVE, SICK, OTHER }
-
-@Serializable
-enum class ResponsibilityType {
-    WEEK_COUNT,
-    MONTH_COUNT,
-    MAINTENANCE,
-    ADMIN,
-    KPI,
-    HAVI,
-    PRESENT,
-    OTHER
+enum class AbsenceType {
+    VACATION, LEAVE, SPECIAL_LEAVE, UNPAID_LEAVE, COMP_TIME,
+    SICK, MATERNITY, ADAPTED_WORK, TRAINING, OTHER
 }
 
 @Serializable
-enum class RecurrenceType { WEEKLY, MONTH_END }
+enum class AbsenceStatus { REQUESTED, APPROVED, REJECTED }
 
 @Serializable
-enum class PersonMarkerType { PRESENT, OFFICE, TRAINING, MEETING, OTHER }
+enum class ResponsibilityType {
+    WEEK_COUNT, MONTH_COUNT, MAINTENANCE, ADMIN, KPI, HACCP, STOCK, HAVI,
+    TRAINING, MEETING, OFFICE, INTERVIEW, CREW_PLANNING, CUSTOM
+}
+
+@Serializable
+enum class RecurrenceType { WEEKLY, MONTHLY_DAY, MONTH_END, SPECIFIC_DATE }
+
+@Serializable
+enum class PersonMarkerType { PRESENT, OFFICE, TRAINING, MEETING, MAINTENANCE, ADMIN, OTHER }
 
 @Serializable
 data class Employee(
@@ -89,6 +89,7 @@ data class Absence(
     val startDate: String,
     val endDate: String,
     val type: AbsenceType,
+    val status: AbsenceStatus = AbsenceStatus.APPROVED,
     val note: String = ""
 ) {
     fun includes(date: LocalDate): Boolean {
@@ -105,8 +106,10 @@ data class ResponsibilityRule(
     val type: ResponsibilityType,
     val recurrence: RecurrenceType = RecurrenceType.WEEKLY,
     val weekday: Int = 1,
+    val monthDay: Int? = null,
+    val date: String? = null,
     val label: String = "",
-    val ensureScheduled: Boolean = true,
+    val preferScheduled: Boolean = true,
     val active: Boolean = true
 )
 
@@ -117,6 +120,26 @@ data class PersonDayMarker(
     val date: String,
     val type: PersonMarkerType = PersonMarkerType.PRESENT,
     val note: String = ""
+)
+
+@Serializable
+data class DayDemand(
+    val date: String,
+    val guestCount: Int? = null,
+    val minimumManagers: Int = 0,
+    val note: String = ""
+)
+
+@Serializable
+data class ShiftSwapRecord(
+    val id: String = UUID.randomUUID().toString(),
+    val firstAssignmentId: String,
+    val secondAssignmentId: String,
+    val firstEmployeeId: String,
+    val secondEmployeeId: String,
+    val firstDate: String,
+    val secondDate: String,
+    val createdAt: String = java.time.LocalDateTime.now().toString()
 )
 
 @Serializable
@@ -155,8 +178,7 @@ data class PlannerSettings(
     val showWeeklyCount: Boolean = true,
     val weekCountWeekday: Int = 1,
     val showMonthCountOnLastDay: Boolean = true,
-    val monthEndCloseManagers: Int = 2,
-    val warnMinimumFreeSundays: Boolean = true
+    val monthEndCloseManagers: Int = 2
 )
 
 @Serializable
@@ -170,6 +192,8 @@ data class AppState(
     val absences: List<Absence> = emptyList(),
     val responsibilities: List<ResponsibilityRule> = emptyList(),
     val personMarkers: List<PersonDayMarker> = emptyList(),
+    val dayDemands: List<DayDemand> = emptyList(),
+    val swapHistory: List<ShiftSwapRecord> = emptyList(),
     val dayNotes: List<DayNote> = emptyList(),
     val assignments: List<Assignment> = emptyList(),
     val assignmentHistory: List<Assignment> = emptyList(),
