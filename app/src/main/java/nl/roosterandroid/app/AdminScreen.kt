@@ -151,7 +151,7 @@ fun AdminScreen(controller: AppController) {
                                 if (start == null || end == null || end.isBefore(start)) {
                                     controller.showStatus("Controleer van/tot datum")
                                 } else {
-                                    controller.addAbsence(
+                                    controller.upsertAbsence(
                                         Absence(
                                             employeeId = employee.id,
                                             startDate = start.toString(),
@@ -238,7 +238,7 @@ fun AdminScreen(controller: AppController) {
                         }
                         Button(
                             onClick = {
-                                controller.addResponsibility(
+                                controller.upsertResponsibility(
                                     ResponsibilityRule(
                                         employeeId = employee.id,
                                         type = types[taskTypeIndex],
@@ -292,7 +292,7 @@ fun AdminScreen(controller: AppController) {
                             onClick = {
                                 val date = runCatching { LocalDate.parse(markerDate) }.getOrNull()
                                 if (date == null) controller.showStatus("Controleer datum")
-                                else controller.addPersonMarker(
+                                else controller.upsertPersonMarker(
                                     PersonDayMarker(
                                         employeeId = employee.id,
                                         date = date.toString(),
