@@ -5,6 +5,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -518,37 +520,163 @@ private fun CapabilityRow(label: String, checked: Boolean, onChecked: (Boolean) 
 @Composable
 private fun ScheduleScreen(controller: AppController) {
     val ym = YearMonth.of(controller.state.year, controller.state.month)
-    val employees = controller.state.employees.associateBy { it.id }
     val templates = controller.state.shiftTemplates.associateBy { it.id }
-    val dateFmt = DateTimeFormatter.ofPattern("EEE d MMM", Locale("nl", "NL"))
+    val employees = controller.state.employees.filter { it.active }
+    val assignments = controller.state.assignments
+    val locale = Locale("nl", "NL")
+    val horizontalScroll = rememberScrollState()
 
     LazyColumn(modifier = Modifier.fillMaxSize()) {
         item { MonthHeader(controller) }
-        if (controller.state.assignments.isEmpty()) {
-            item { InfoCard("Nog geen rooster. Ga naar Overzicht en tik op ‘Genereer rooster’.") }
+
+        if (assignments.isEmpty()) {
+            item {
+                InfoCard("Nog geen rooster. Ga naar Overzicht en tik op ‘Genereer rooster’.")
+            }
         }
-        for (d in 1..ym.lengthOfMonth()) {
-            val date = ym.atDay(d)
-            val dayAssignments = controller.state.assignments.filter { it.date == date.toString() }
-            item(key = date.toString()) {
-                Card(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 5.dp)) {
-                    Column(Modifier.padding(12.dp)) {
-                        Text(date.format(dateFmt).replaceFirstChar { it.uppercase() }, fontWeight = FontWeight.Bold)
-                        if (dayAssignments.isEmpty()) {
-                            Text("Geen managerdiensten", style = MaterialTheme.typography.bodySmall)
-                        } else {
-                            dayAssignments.forEach { a ->
-                                val e = employees[a.employeeId]
-                                val t = templates[a.shiftTemplateId]
-                                Text("${t?.name ?: "Dienst"} ${t?.start ?: ""}–${t?.end ?: ""}  •  ${e?.name ?: "Onbekend"}")
+
+        item {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
+            ) {
+                Text(
+                    "Maandoverzicht",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+
+                Text(
+                    "Veeg de datums naar links/rechts. De namen blijven staan.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+
+                Spacer(Modifier.height(8.dp))
+
+                Row {
+                    // Vaste linkerkolom met managers
+                    Column {
+                        MatrixCell(
+                            text = "Manager",
+                            cellWidth = 112.dp,
+                            strong = true
+                        )
+
+                        employees.forEach { employee ->
+                            MatrixCell(
+                                text = employee.name,
+                                cellWidth = 112.dp,
+                                strong = true
+                            )
+                        }
+                    }
+
+                    // Scrollbaar gedeelte met alle dagen
+                    Column(
+                        modifier = Modifier.horizontalScroll(horizontalScroll)
+                    ) {
+                        Row {
+                            for (day in 1..ym.lengthOfMonth()) {
+                                val date = ym.atDay(day)
+                                val dow = date.dayOfWeek
+                                    .getDisplayName(TextStyle.SHORT, locale)
+                                    .replaceFirstChar { it.uppercase() }
+
+                                MatrixCell(
+                                    text = "$dow\n$day",
+                                    cellWidth = 72.dp,
+                                    strong = true
+                                )
+                            }
+                        }
+
+                        employees.forEach { employee ->
+                            Row {
+                                for (day in 1..ym.lengthOfMonth()) {
+                                    val date = ym.atDay(day).toString()
+
+                                    val employeeAssignments =
+                                        assignments.filter {
+                                            it.employeeId == employee.id &&
+                                            it.date == date
+                                        }
+
+                                    val label =
+                                        if (employeeAssignments.isEmpty()) {
+                                            "Vrij"
+                                        } else {
+                                            employeeAssignments.joinToString("\n") { assignment ->
+                                                val template =
+                                                    templates[assignment.shiftTemplateId]
+
+                                                matrixShiftLabel(template)
+                                            }
+                                        }
+
+                                    MatrixCell(
+                                        text = label,
+                                        cellWidth = 72.dp,
+                                        strong = employeeAssignments.isNotEmpty()
+                                    )
+                                }
                             }
                         }
                     }
                 }
             }
         }
+
         item { Spacer(Modifier.height(24.dp)) }
     }
+}
+
+@Composable
+private fun MatrixCell(
+    text: String,
+    cellWidth: androidx.compose.ui.unit.Dp,
+    strong: Boolean = false
+) {
+    Card(
+        modifier = Modifier
+            .width(cellWidth)
+            .height(62.dp)
+            .padding(1.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(4.dp),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = text,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = if (strong) FontWeight.Bold else FontWeight.Normal,
+                maxLines = 3
+            )
+        }
+    }
+}
+
+private fun matrixShiftLabel(template: ShiftTemplate?): String {
+    if (template == null) return "Dienst"
+
+    val code = when (template.kind) {
+        ShiftKind.SETUP -> "SET"
+        ShiftKind.DAY -> "DAG"
+        ShiftKind.MIDDLE -> "TUS"
+        ShiftKind.CLOSE -> "SLU"
+        ShiftKind.KPI -> "KPI"
+        ShiftKind.CUSTOM -> template.name.take(3).uppercase()
+    }
+
+    val start = template.start.removeSuffix(":00")
+    val end = template.end.removeSuffix(":00")
+
+    return "$code\n$start-$end"
 }
 
 @Composable
