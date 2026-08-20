@@ -179,7 +179,7 @@ class AppController(private val storage: ScheduleStorage) {
             .onFailure { status = "Import mislukt: ${it.message ?: "ongeldig bestand"}" }
     }
 
-    fun setStatus(message: String) { status = message }
+    fun showStatus(message: String) { status = message }
 
     private fun assignmentMonth(a: Assignment): YearMonth? = runCatching { YearMonth.from(LocalDate.parse(a.date)) }.getOrNull()
 }
@@ -198,8 +198,8 @@ fun RoosterApp(controller: AppController) {
         if (uri != null) {
             runCatching {
                 context.contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { it.write(controller.exportJson()) }
-            }.onSuccess { controller.setStatus("Export opgeslagen") }
-                .onFailure { controller.setStatus("Export mislukt: ${it.message}") }
+            }.onSuccess { controller.showStatus("Export opgeslagen") }
+                .onFailure { controller.showStatus("Export mislukt: ${it.message}") }
         }
     }
 
@@ -209,7 +209,7 @@ fun RoosterApp(controller: AppController) {
                 context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
                     ?: error("Bestand kon niet worden gelezen")
             }.onSuccess { controller.importJson(it) }
-                .onFailure { controller.setStatus("Import mislukt: ${it.message}") }
+                .onFailure { controller.showStatus("Import mislukt: ${it.message}") }
         }
     }
 
@@ -422,7 +422,7 @@ private fun TeamScreen(controller: AppController) {
                                 val validEarliest = earliestStart.isBlank() || runCatching { java.time.LocalTime.parse(earliestStart) }.isSuccess
                                 val validLatest = latestEnd.isBlank() || runCatching { java.time.LocalTime.parse(latestEnd) }.isSuccess
                                 if (validDate == null || !validEarliest || !validLatest) {
-                                    controller.setStatus("Controleer datum en tijden (HH:mm)")
+                                    controller.showStatus("Controleer datum en tijden (HH:mm)")
                                 } else {
                                     controller.upsertAvailability(
                                         Availability(
