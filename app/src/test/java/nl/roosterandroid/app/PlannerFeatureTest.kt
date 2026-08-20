@@ -30,7 +30,7 @@ class PlannerFeatureTest {
             month = 8,
             employees = listOf(a, b),
             responsibilities = listOf(
-                ResponsibilityRule(employeeId = a.id, type = ResponsibilityType.WEEK_COUNT, recurrence = RecurrenceType.WEEKLY, weekday = 1, ensureScheduled = true)
+                ResponsibilityRule(employeeId = a.id, type = ResponsibilityType.WEEK_COUNT, recurrence = RecurrenceType.WEEKLY, weekday = 1, preferScheduled = true)
             )
         )
         val result = ScheduleEngine().generate(state)
