@@ -219,4 +219,80 @@ class SolverScheduleEngineTest {
             it.employeeId == employee.id && it.date == "2026-06-01"
         })
     }
+    @Test
+    fun automaticPlanningNeverUsesKpiAsOrdinaryShift() {
+        val employees = (1..5).map {
+            Employee(
+                name = "M$it",
+                contractedDaysPerWeek = 5,
+                contractedHoursPerWeek = 40.0,
+                maxShiftsPerWeek = 5
+            )
+        }
+        val state = AppState(
+            year = 2026,
+            month = 8,
+            employees = employees
+        )
+
+        val result = ScheduleEngine().generate(state)
+        val templates = state.shiftTemplates.associateBy { it.id }
+
+        assertFalse(result.assignments.any {
+            templates[it.shiftTemplateId]?.kind == ShiftKind.KPI
+        })
+    }
+
+    @Test
+    fun kpiTaskIsOverlayOnNormalOperationalShift() {
+        val jan = Employee(
+            name = "Jan",
+            contractedDaysPerWeek = 5,
+            contractedHoursPerWeek = 40.0,
+            maxShiftsPerWeek = 5
+        )
+        val others = (1..4).map {
+            Employee(
+                name = "M$it",
+                contractedDaysPerWeek = 5,
+                contractedHoursPerWeek = 40.0,
+                maxShiftsPerWeek = 5
+            )
+        }
+        val state = AppState(
+            year = 2026,
+            month = 8,
+            employees = listOf(jan) + others,
+            responsibilities = listOf(
+                ResponsibilityRule(
+                    employeeId = jan.id,
+                    type = ResponsibilityType.KPI,
+                    recurrence = RecurrenceType.WEEKLY,
+                    weekday = 1,
+                    preferScheduled = true
+                )
+            )
+        )
+
+        val result = ScheduleEngine().generate(state)
+        val templates = state.shiftTemplates.associateBy { it.id }
+        val mondayAssignments = result.assignments.filter {
+            it.employeeId == jan.id &&
+                java.time.LocalDate.parse(it.date).dayOfWeek.value == 1
+        }
+
+        assertTrue(mondayAssignments.isNotEmpty())
+        assertTrue(mondayAssignments.all {
+            templates[it.shiftTemplateId]?.kind in setOf(
+                ShiftKind.DAY,
+                ShiftKind.SETUP,
+                ShiftKind.MIDDLE,
+                ShiftKind.CLOSE
+            )
+        })
+        assertFalse(mondayAssignments.any {
+            templates[it.shiftTemplateId]?.kind == ShiftKind.KPI
+        })
+    }
+
 }

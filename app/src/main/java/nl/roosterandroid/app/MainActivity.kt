@@ -441,7 +441,7 @@ class AppController(private val storage: ScheduleStorage) {
 
     fun generate() {
         val result = engine.generate(state)
-        commit(state.copy(assignments = result.assignments), "Rooster geoptimaliseerd met Solver v0.5")
+        commit(state.copy(assignments = result.assignments), "Rooster geoptimaliseerd met Solver v0.5.1")
         unfilled = result.unfilled
         plannerWarnings = result.warnings
     }
