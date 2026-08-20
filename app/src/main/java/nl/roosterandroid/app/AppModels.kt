@@ -52,6 +52,22 @@ data class Availability(
 )
 
 @Serializable
+data class WeeklyAvailability(
+    val employeeId: String,
+    val weekday: Int,
+    val available: Boolean = true,
+    val earliestStart: String? = null,
+    val latestEnd: String? = null,
+    val fixedShiftKind: ShiftKind? = null
+)
+
+@Serializable
+data class DayNote(
+    val date: String,
+    val text: String
+)
+
+@Serializable
 data class Assignment(
     val id: String = UUID.randomUUID().toString(),
     val employeeId: String,
@@ -73,7 +89,15 @@ data class PlannerSettings(
     val strictDailyRestHours: Int = 11,
     val allowOneReducedDailyRestPer7Days: Boolean = false,
     val allowIncidentalTwelveHourNightShift: Boolean = false,
-    val treatMaxConsecutiveDaysAsHardRule: Boolean = true
+    val treatMaxConsecutiveDaysAsHardRule: Boolean = true,
+    val traineeMustHaveExperiencedManager: Boolean = true,
+    val minimizeBorrowedManagers: Boolean = true,
+    val minimumTwoDayOffBlocks: Int = 1,
+    val preferredTwoDayOffBlocks: Int = 2,
+    val showWeeklyCount: Boolean = true,
+    val weekCountWeekday: Int = 1,
+    val showMonthCountOnLastDay: Boolean = true,
+    val monthEndCloseManagers: Int = 2
 )
 
 @Serializable
@@ -83,6 +107,8 @@ data class AppState(
     val employees: List<Employee> = emptyList(),
     val shiftTemplates: List<ShiftTemplate> = defaultShiftTemplates(),
     val availability: List<Availability> = emptyList(),
+    val weeklyAvailability: List<WeeklyAvailability> = emptyList(),
+    val dayNotes: List<DayNote> = emptyList(),
     val assignments: List<Assignment> = emptyList(),
     val assignmentHistory: List<Assignment> = emptyList(),
     val settings: PlannerSettings = PlannerSettings()

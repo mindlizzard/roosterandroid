@@ -24,6 +24,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -41,6 +42,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -49,10 +51,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.YearMonth
 import java.time.format.DateTimeFormatter
@@ -121,6 +126,58 @@ class AppController(private val storage: ScheduleStorage) {
         commit(state.copy(availability = state.availability.filterNot { it.employeeId == employeeId && it.date == date }))
     }
 
+    fun upsertWeeklyAvailability(rule: WeeklyAvailability) {
+        val updated = state.weeklyAvailability.filterNot {
+            it.employeeId == rule.employeeId && it.weekday == rule.weekday
+        } + rule
+        commit(state.copy(weeklyAvailability = updated), "Vaste weekbeschikbaarheid opgeslagen")
+    }
+
+    fun removeWeeklyAvailability(employeeId: String, weekday: Int) {
+        commit(state.copy(
+            weeklyAvailability = state.weeklyAvailability.filterNot {
+                it.employeeId == employeeId && it.weekday == weekday
+            }
+        ), "Vaste weekregel verwijderd")
+    }
+
+    fun upsertDayNote(date: String, text: String) {
+        val clean = text.trim()
+        val keep = state.dayNotes.filterNot { it.date == date }
+        commit(
+            state.copy(dayNotes = if (clean.isEmpty()) keep else keep + DayNote(date, clean)),
+            if (clean.isEmpty()) "Bijzonderheid verwijderd" else "Bijzonderheid opgeslagen"
+        )
+    }
+
+    fun setManualAssignment(employeeId: String, date: String, templateId: String?) {
+        val without = state.assignments.filterNot {
+            it.employeeId == employeeId && it.date == date
+        }
+        if (templateId == null) {
+            commit(state.copy(assignments = without), "Dienst op vrij gezet")
+            return
+        }
+
+        val candidate = Assignment(
+            employeeId = employeeId,
+            date = date,
+            shiftTemplateId = templateId,
+            source = "manual"
+        )
+        val proposed = state.copy(assignments = without + candidate)
+        val errors = validator.validate(proposed).filter {
+            it.severity == AtwValidator.Severity.ERROR &&
+                it.employeeId == employeeId &&
+                (it.date?.toString() == date || it.date == null)
+        }
+        if (errors.isNotEmpty()) {
+            status = "Niet opgeslagen: ${errors.first().message}"
+            return
+        }
+        commit(proposed, "Handmatige dienst opgeslagen")
+    }
+
     fun updateTemplate(template: ShiftTemplate) {
         commit(state.copy(shiftTemplates = state.shiftTemplates.map { if (it.id == template.id) template else it }))
     }
@@ -132,7 +189,8 @@ class AppController(private val storage: ScheduleStorage) {
             employees = state.employees.filterNot { it.id == id },
             assignments = keepAssignments,
             assignmentHistory = keepHistory,
-            availability = state.availability.filterNot { it.employeeId == id }
+            availability = state.availability.filterNot { it.employeeId == id },
+            weeklyAvailability = state.weeklyAvailability.filterNot { it.employeeId == id }
         ))
     }
 
@@ -153,7 +211,7 @@ class AppController(private val storage: ScheduleStorage) {
     }
 
     fun generate() {
-        val result = engine.generate(state.copy(assignments = emptyList()))
+        val result = engine.generate(state)
         commit(state.copy(assignments = result.assignments), "Rooster opnieuw gegenereerd")
         unfilled = result.unfilled
         plannerWarnings = result.warnings
@@ -471,10 +529,128 @@ private fun TeamScreen(controller: AppController) {
             }
         }
 
+        if (controller.state.employees.isNotEmpty()) {
+            item { RecurringAvailabilityPanel(controller) }
+        }
+
         items(controller.state.employees, key = { it.id }) { employee ->
             EmployeeCard(employee, controller::updateEmployee, controller::removeEmployee)
         }
         item { Spacer(Modifier.height(24.dp)) }
+    }
+}
+
+@Composable
+private fun RecurringAvailabilityPanel(controller: AppController) {
+    var employeeIndex by remember { mutableIntStateOf(0) }
+    var weekday by remember { mutableIntStateOf(1) }
+    var available by remember { mutableStateOf(true) }
+    var earliest by remember { mutableStateOf("") }
+    var latest by remember { mutableStateOf("") }
+
+    val employees = controller.state.employees
+    if (employees.isEmpty()) return
+    val idx = employeeIndex.coerceIn(0, employees.lastIndex)
+    val employee = employees[idx]
+    val dayNames = listOf("Ma", "Di", "Wo", "Do", "Vr", "Za", "Zo")
+    val current = controller.state.weeklyAvailability.lastOrNull {
+        it.employeeId == employee.id && it.weekday == weekday
+    }
+
+    Card(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                "Vaste weekbeschikbaarheid",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+            Text("Voor regels zoals ‘elke woensdag vrij’ of ‘zaterdag uiterlijk 19:00’. Een datumregel gaat altijd voor.")
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(employee.name, modifier = Modifier.weight(1f), fontWeight = FontWeight.Bold)
+                OutlinedButton(onClick = {
+                    employeeIndex = (idx + 1) % employees.size
+                    available = true
+                    earliest = ""
+                    latest = ""
+                }) { Text("Volgende") }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                dayNames.forEachIndexed { i, label ->
+                    val d = i + 1
+                    if (d == weekday) {
+                        Button(onClick = { weekday = d }) { Text(label) }
+                    } else {
+                        OutlinedButton(onClick = {
+                            weekday = d
+                            val found = controller.state.weeklyAvailability.lastOrNull {
+                                it.employeeId == employee.id && it.weekday == d
+                            }
+                            available = found?.available ?: true
+                            earliest = found?.earliestStart ?: ""
+                            latest = found?.latestEnd ?: ""
+                        }) { Text(label) }
+                    }
+                }
+            }
+            SettingSwitch("Beschikbaar", available) { available = it }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = earliest,
+                    onValueChange = { earliest = it },
+                    label = { Text("Vanaf") },
+                    placeholder = { Text("09:00") },
+                    modifier = Modifier.weight(1f),
+                    singleLine = true
+                )
+                OutlinedTextField(
+                    value = latest,
+                    onValueChange = { latest = it },
+                    label = { Text("Tot") },
+                    placeholder = { Text("19:00") },
+                    modifier = Modifier.weight(1f),
+                    singleLine = true
+                )
+            }
+            current?.let {
+                Text(
+                    "Opgeslagen ${dayNames[weekday - 1]}: " +
+                        if (!it.available) "niet beschikbaar"
+                        else listOfNotNull(
+                            it.earliestStart?.let { t -> "vanaf $t" },
+                            it.latestEnd?.let { t -> "tot $t" }
+                        ).ifEmpty { listOf("beschikbaar") }.joinToString(" • "),
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = {
+                        val okStart = earliest.isBlank() ||
+                            runCatching { java.time.LocalTime.parse(earliest) }.isSuccess
+                        val okEnd = latest.isBlank() ||
+                            runCatching { java.time.LocalTime.parse(latest) }.isSuccess
+                        if (!okStart || !okEnd) {
+                            controller.showStatus("Gebruik tijden als HH:mm")
+                        } else {
+                            controller.upsertWeeklyAvailability(
+                                WeeklyAvailability(
+                                    employeeId = employee.id,
+                                    weekday = weekday,
+                                    available = available,
+                                    earliestStart = earliest.ifBlank { null },
+                                    latestEnd = latest.ifBlank { null }
+                                )
+                            )
+                        }
+                    },
+                    modifier = Modifier.weight(1f)
+                ) { Text("Opslaan") }
+                OutlinedButton(
+                    onClick = { controller.removeWeeklyAvailability(employee.id, weekday) },
+                    modifier = Modifier.weight(1f)
+                ) { Text("Verwijder") }
+            }
+        }
     }
 }
 
@@ -498,6 +674,38 @@ private fun EmployeeCard(employee: Employee, onUpdate: (Employee) -> Unit, onDel
             CapabilityRow("Sluit", employee.canClose) { onUpdate(employee.copy(canClose = it)) }
             CapabilityRow("KPI", employee.canKpi) { onUpdate(employee.copy(canKpi = it)) }
             Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Contractdagen/week", modifier = Modifier.weight(1f))
+                OutlinedButton(onClick = {
+                    val days = (employee.contractedDaysPerWeek - 1).coerceAtLeast(1)
+                    onUpdate(employee.copy(contractedDaysPerWeek = days))
+                }) { Text("−") }
+                Spacer(Modifier.width(8.dp))
+                Text(employee.contractedDaysPerWeek.toString(), fontWeight = FontWeight.Bold)
+                Spacer(Modifier.width(8.dp))
+                OutlinedButton(onClick = {
+                    val days = (employee.contractedDaysPerWeek + 1).coerceAtMost(7)
+                    onUpdate(employee.copy(contractedDaysPerWeek = days))
+                }) { Text("+") }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Contracturen/week", modifier = Modifier.weight(1f))
+                OutlinedButton(onClick = {
+                    onUpdate(employee.copy(
+                        contractedHoursPerWeek =
+                            (employee.contractedHoursPerWeek - 4.0).coerceAtLeast(4.0)
+                    ))
+                }) { Text("−") }
+                Spacer(Modifier.width(8.dp))
+                Text("${employee.contractedHoursPerWeek.toInt()}u", fontWeight = FontWeight.Bold)
+                Spacer(Modifier.width(8.dp))
+                OutlinedButton(onClick = {
+                    onUpdate(employee.copy(
+                        contractedHoursPerWeek =
+                            (employee.contractedHoursPerWeek + 4.0).coerceAtMost(60.0)
+                    ))
+                }) { Text("+") }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("Max diensten/week", modifier = Modifier.weight(1f))
                 OutlinedButton(onClick = { onUpdate(employee.copy(maxShiftsPerWeek = (employee.maxShiftsPerWeek - 1).coerceAtLeast(1))) }) { Text("−") }
                 Spacer(Modifier.width(8.dp))
@@ -520,16 +728,99 @@ private fun CapabilityRow(label: String, checked: Boolean, onChecked: (Boolean) 
 @Composable
 private fun ScheduleScreen(controller: AppController) {
     val ym = YearMonth.of(controller.state.year, controller.state.month)
-    val templates = controller.state.shiftTemplates.associateBy { it.id }
     val employees = controller.state.employees.filter { it.active }
-    val assignments = controller.state.assignments
+    val templates = controller.state.shiftTemplates.associateBy { it.id }
+    val managerScroll = rememberScrollState()
     val locale = Locale("nl", "NL")
-    val horizontalScroll = rememberScrollState()
+
+    var noteDate by remember { mutableStateOf<String?>(null) }
+    var noteDraft by remember { mutableStateOf("") }
+    var editEmployeeId by remember { mutableStateOf<String?>(null) }
+    var editDate by remember { mutableStateOf<String?>(null) }
+
+    noteDate?.let { date ->
+        AlertDialog(
+            onDismissRequest = { noteDate = null },
+            title = { Text("Bijzonderheden • $date") },
+            text = {
+                OutlinedTextField(
+                    value = noteDraft,
+                    onValueChange = { noteDraft = it },
+                    label = { Text("Bijzonderheden") },
+                    placeholder = { Text("Bijv. maandsluiting, meeting, vakantie, HAVI…") },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 2
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    controller.upsertDayNote(date, noteDraft)
+                    noteDate = null
+                }) { Text("Opslaan") }
+            },
+            dismissButton = {
+                TextButton(onClick = { noteDate = null }) { Text("Annuleren") }
+            }
+        )
+    }
+
+    if (editEmployeeId != null && editDate != null) {
+        val employee = employees.firstOrNull { it.id == editEmployeeId }
+        val date = runCatching { LocalDate.parse(editDate) }.getOrNull()
+        if (employee != null && date != null) {
+            val options = controller.state.shiftTemplates.filter {
+                date.dayOfWeek.value in it.enabledWeekdays && employee.canWork(it.kind)
+            }
+            AlertDialog(
+                onDismissRequest = {
+                    editEmployeeId = null
+                    editDate = null
+                },
+                title = {
+                    Text(
+                        "${employee.name} • ${date.dayOfMonth} " +
+                            date.month.getDisplayName(TextStyle.SHORT, locale)
+                    )
+                },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("Kies handmatig een dienst. Handmatige vakjes blijven staan bij opnieuw genereren.")
+                        TextButton(onClick = {
+                            controller.setManualAssignment(employee.id, date.toString(), null)
+                            editEmployeeId = null
+                            editDate = null
+                        }) { Text("Vrij") }
+
+                        options.forEach { template ->
+                            TextButton(onClick = {
+                                controller.setManualAssignment(
+                                    employee.id,
+                                    date.toString(),
+                                    template.id
+                                )
+                                editEmployeeId = null
+                                editDate = null
+                            }) {
+                                Text("${template.name}  ${template.start}–${template.end}")
+                            }
+                        }
+                    }
+                },
+                confirmButton = {},
+                dismissButton = {
+                    TextButton(onClick = {
+                        editEmployeeId = null
+                        editDate = null
+                    }) { Text("Sluiten") }
+                }
+            )
+        }
+    }
 
     LazyColumn(modifier = Modifier.fillMaxSize()) {
         item { MonthHeader(controller) }
 
-        if (assignments.isEmpty()) {
+        if (controller.state.assignments.isEmpty()) {
             item {
                 InfoCard("Nog geen rooster. Ga naar Overzicht en tik op ‘Genereer rooster’.")
             }
@@ -537,133 +828,231 @@ private fun ScheduleScreen(controller: AppController) {
 
         item {
             Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 4.dp)
             ) {
                 Text(
-                    "Maandoverzicht",
+                    "Maandmatrix",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold
                 )
-
                 Text(
-                    "Veeg de datums naar links/rechts. De namen blijven staan.",
+                    "Datums staan onder elkaar. Veeg horizontaal langs de managers. Tik een bijzonderheid of dienstvakje om te wijzigen.",
                     style = MaterialTheme.typography.bodySmall
                 )
-
                 Spacer(Modifier.height(8.dp))
 
                 Row {
-                    // Vaste linkerkolom met managers
-                    Column {
-                        MatrixCell(
-                            text = "Manager",
-                            cellWidth = 112.dp,
-                            strong = true
-                        )
+                    MatrixCell("Datum", 78.dp, MatrixColors.Header, strong = true)
+                    MatrixCell(
+                        "Bijzonderheden",
+                        146.dp,
+                        MatrixColors.NoteHeader,
+                        strong = true
+                    )
 
+                    Row(Modifier.horizontalScroll(managerScroll)) {
                         employees.forEach { employee ->
                             MatrixCell(
                                 text = employee.name,
-                                cellWidth = 112.dp,
+                                cellWidth = 90.dp,
+                                containerColor = managerHeaderColor(employee.role),
                                 strong = true
                             )
-                        }
-                    }
-
-                    // Scrollbaar gedeelte met alle dagen
-                    Column(
-                        modifier = Modifier.horizontalScroll(horizontalScroll)
-                    ) {
-                        Row {
-                            for (day in 1..ym.lengthOfMonth()) {
-                                val date = ym.atDay(day)
-                                val dow = date.dayOfWeek
-                                    .getDisplayName(TextStyle.SHORT, locale)
-                                    .replaceFirstChar { it.uppercase() }
-
-                                MatrixCell(
-                                    text = "$dow\n$day",
-                                    cellWidth = 72.dp,
-                                    strong = true
-                                )
-                            }
-                        }
-
-                        employees.forEach { employee ->
-                            Row {
-                                for (day in 1..ym.lengthOfMonth()) {
-                                    val date = ym.atDay(day).toString()
-
-                                    val employeeAssignments =
-                                        assignments.filter {
-                                            it.employeeId == employee.id &&
-                                            it.date == date
-                                        }
-
-                                    val label =
-                                        if (employeeAssignments.isEmpty()) {
-                                            "Vrij"
-                                        } else {
-                                            employeeAssignments.joinToString("\n") { assignment ->
-                                                val template =
-                                                    templates[assignment.shiftTemplateId]
-
-                                                matrixShiftLabel(template)
-                                            }
-                                        }
-
-                                    MatrixCell(
-                                        text = label,
-                                        cellWidth = 72.dp,
-                                        strong = employeeAssignments.isNotEmpty()
-                                    )
-                                }
-                            }
                         }
                     }
                 }
             }
         }
 
-        item { Spacer(Modifier.height(24.dp)) }
+        for (day in 1..ym.lengthOfMonth()) {
+            val date = ym.atDay(day)
+            val dateString = date.toString()
+            val weekend =
+                date.dayOfWeek == DayOfWeek.SATURDAY ||
+                date.dayOfWeek == DayOfWeek.SUNDAY
+            val dateColor =
+                if (weekend) MatrixColors.Weekend else MatrixColors.Date
+
+            item(key = "matrix-$dateString") {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp)) {
+                    val dow = date.dayOfWeek
+                        .getDisplayName(TextStyle.SHORT, locale)
+                        .replaceFirstChar { it.uppercase() }
+                    val week = date.get(
+                        java.time.temporal.WeekFields.ISO.weekOfWeekBasedYear()
+                    )
+
+                    MatrixCell(
+                        text = "$dow ${date.dayOfMonth}\nW$week",
+                        cellWidth = 78.dp,
+                        containerColor = dateColor,
+                        strong = true
+                    )
+
+                    val details = buildDayDetails(controller, date, ym)
+                    MatrixCell(
+                        text = details.ifBlank { " " },
+                        cellWidth = 146.dp,
+                        containerColor =
+                            if (details.contains("⚠")) MatrixColors.Error
+                            else MatrixColors.Note,
+                        onClick = {
+                            noteDate = dateString
+                            noteDraft = controller.state.dayNotes
+                                .firstOrNull { it.date == dateString }
+                                ?.text
+                                .orEmpty()
+                        }
+                    )
+
+                    Row(Modifier.horizontalScroll(managerScroll)) {
+                        employees.forEach { employee ->
+                            val assignment = controller.state.assignments.lastOrNull {
+                                it.employeeId == employee.id && it.date == dateString
+                            }
+                            val template = assignment?.let {
+                                templates[it.shiftTemplateId]
+                            }
+                            val explicitAvailability =
+                                controller.state.availability.lastOrNull {
+                                    it.employeeId == employee.id &&
+                                        it.date == dateString
+                                }
+                            val weeklyAvailability =
+                                controller.state.weeklyAvailability.lastOrNull {
+                                    it.employeeId == employee.id &&
+                                        it.weekday == date.dayOfWeek.value
+                                }
+                            val unavailable =
+                                explicitAvailability?.available == false ||
+                                    (
+                                        explicitAvailability == null &&
+                                            weeklyAvailability?.available == false
+                                    )
+
+                            val conflict = controller.violations.any {
+                                it.severity == AtwValidator.Severity.ERROR &&
+                                    it.employeeId == employee.id &&
+                                    it.date == date
+                            }
+
+                            val text = when {
+                                assignment != null && template != null ->
+                                    matrixShiftLabel(template, assignment.source)
+                                unavailable -> "Niet\nbesch."
+                                else -> "Vrij"
+                            }
+
+                            val color = when {
+                                conflict -> MatrixColors.Error
+                                unavailable -> MatrixColors.Unavailable
+                                template != null -> shiftColor(template.kind)
+                                else ->
+                                    if (weekend) MatrixColors.FreeWeekend
+                                    else MatrixColors.Free
+                            }
+
+                            MatrixCell(
+                                text = text,
+                                cellWidth = 90.dp,
+                                containerColor = color,
+                                strong = assignment != null || unavailable,
+                                onClick = {
+                                    editEmployeeId = employee.id
+                                    editDate = dateString
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        item {
+            MatrixLegend()
+            Spacer(Modifier.height(24.dp))
+        }
     }
+}
+
+private object MatrixColors {
+    val Header = Color(0xFFDDE7F5)
+    val NoteHeader = Color(0xFFFFE6A8)
+    val Date = Color(0xFFF3F5F7)
+    val Weekend = Color(0xFFE7E9EE)
+    val Note = Color(0xFFFFF4CF)
+    val Setup = Color(0xFFDDF3D8)
+    val Day = Color(0xFFD8EBFA)
+    val Middle = Color(0xFFFFE4B5)
+    val Close = Color(0xFFE6DCF7)
+    val Kpi = Color(0xFFD7F2EF)
+    val Custom = Color(0xFFF5DDEC)
+    val Free = Color(0xFFF7F7F7)
+    val FreeWeekend = Color(0xFFEEEEF1)
+    val Unavailable = Color(0xFFF6D7D7)
+    val Error = Color(0xFFFFC9C9)
+    val RmHeader = Color(0xFFD1E6FF)
+    val TraineeHeader = Color(0xFFFFE2C6)
+    val BorrowedHeader = Color(0xFFFFF0B8)
 }
 
 @Composable
 private fun MatrixCell(
     text: String,
     cellWidth: androidx.compose.ui.unit.Dp,
-    strong: Boolean = false
+    containerColor: Color,
+    strong: Boolean = false,
+    onClick: (() -> Unit)? = null
 ) {
     Card(
+        onClick = { onClick?.invoke() },
+        enabled = onClick != null,
         modifier = Modifier
             .width(cellWidth)
-            .height(62.dp)
-            .padding(1.dp)
+            .height(64.dp)
+            .padding(1.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = containerColor,
+            disabledContainerColor = containerColor,
+            disabledContentColor = MaterialTheme.colorScheme.onSurface
+        )
     ) {
         Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(4.dp),
+            modifier = Modifier.fillMaxSize().padding(4.dp),
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(
                 text = text,
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                textAlign = TextAlign.Center,
                 style = MaterialTheme.typography.labelSmall,
                 fontWeight = if (strong) FontWeight.Bold else FontWeight.Normal,
-                maxLines = 3
+                maxLines = 4
             )
         }
     }
 }
 
-private fun matrixShiftLabel(template: ShiftTemplate?): String {
-    if (template == null) return "Dienst"
+private fun managerHeaderColor(role: EmployeeRole): Color = when (role) {
+    EmployeeRole.RM -> MatrixColors.RmHeader
+    EmployeeRole.TRAINEE -> MatrixColors.TraineeHeader
+    EmployeeRole.BORROWED -> MatrixColors.BorrowedHeader
+    EmployeeRole.MANAGER -> MatrixColors.Header
+}
 
+private fun shiftColor(kind: ShiftKind): Color = when (kind) {
+    ShiftKind.SETUP -> MatrixColors.Setup
+    ShiftKind.DAY -> MatrixColors.Day
+    ShiftKind.MIDDLE -> MatrixColors.Middle
+    ShiftKind.CLOSE -> MatrixColors.Close
+    ShiftKind.KPI -> MatrixColors.Kpi
+    ShiftKind.CUSTOM -> MatrixColors.Custom
+}
+
+private fun matrixShiftLabel(
+    template: ShiftTemplate,
+    source: String
+): String {
     val code = when (template.kind) {
         ShiftKind.SETUP -> "SET"
         ShiftKind.DAY -> "DAG"
@@ -672,11 +1061,63 @@ private fun matrixShiftLabel(template: ShiftTemplate?): String {
         ShiftKind.KPI -> "KPI"
         ShiftKind.CUSTOM -> template.name.take(3).uppercase()
     }
-
+    val lock = if (source == "manual") " 🔒" else ""
     val start = template.start.removeSuffix(":00")
     val end = template.end.removeSuffix(":00")
+    return "$code$lock\n$start-$end"
+}
 
-    return "$code\n$start-$end"
+private fun buildDayDetails(
+    controller: AppController,
+    date: LocalDate,
+    ym: YearMonth
+): String {
+    val parts = mutableListOf<String>()
+    controller.state.dayNotes.firstOrNull { it.date == date.toString() }
+        ?.text
+        ?.takeIf { it.isNotBlank() }
+        ?.let { parts += it }
+
+    val settings = controller.state.settings
+
+    if (settings.showMonthCountOnLastDay && date == ym.atEndOfMonth()) {
+        parts += "Maandtelling"
+    } else if (
+        settings.showWeeklyCount &&
+        date.dayOfWeek.value == settings.weekCountWeekday
+    ) {
+        parts += "Weektelling"
+    }
+
+    if (date.dayOfWeek.value in settings.busyWeekdays) {
+        parts += "Drukke dag"
+    }
+
+    if (controller.violations.any {
+            it.severity == AtwValidator.Severity.ERROR &&
+                it.date == date
+        }
+    ) {
+        parts += "⚠ ATW"
+    }
+
+    return parts.distinct().joinToString(" • ")
+}
+
+@Composable
+private fun MatrixLegend() {
+    Column(
+        Modifier.fillMaxWidth().padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Text("Kleuren", fontWeight = FontWeight.Bold)
+        Text("SET setup • DAG dag • TUS tussen • SLU sluit • KPI vaste KPI-taak")
+        Text("Groen setup • blauw dag • oranje tussen • paars sluit • turquoise KPI • rood conflict/niet beschikbaar")
+        Text(
+            "🔒 = handmatig vastgezet en blijft staan bij opnieuw genereren",
+            style = MaterialTheme.typography.bodySmall
+        )
+    }
 }
 
 @Composable
@@ -700,6 +1141,34 @@ private fun RulesScreen(controller: AppController, onExport: () -> Unit, onImpor
                 }
                 SettingSwitch("Tussenmanager op drukke dagen", s.requireMiddleOnBusyDays) {
                     controller.updateSettings(s.copy(requireMiddleOnBusyDays = it))
+                }
+                SettingSwitch("Trainee nooit zonder ervaren manager", s.traineeMustHaveExperiencedManager) {
+                    controller.updateSettings(s.copy(traineeMustHaveExperiencedManager = it))
+                }
+                SettingSwitch("Minimaliseer leenmanager", s.minimizeBorrowedManagers) {
+                    controller.updateSettings(s.copy(minimizeBorrowedManagers = it))
+                }
+                SettingSwitch("Weektelling in Bijzonderheden", s.showWeeklyCount) {
+                    controller.updateSettings(s.copy(showWeeklyCount = it))
+                }
+                SettingSwitch("Maandtelling op laatste dag", s.showMonthCountOnLastDay) {
+                    controller.updateSettings(s.copy(showMonthCountOnLastDay = it))
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Sluitmanagers bij maandsluiting", modifier = Modifier.weight(1f))
+                    OutlinedButton(onClick = {
+                        controller.updateSettings(
+                            s.copy(monthEndCloseManagers = (s.monthEndCloseManagers - 1).coerceAtLeast(1))
+                        )
+                    }) { Text("−") }
+                    Spacer(Modifier.width(8.dp))
+                    Text(s.monthEndCloseManagers.toString(), fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.width(8.dp))
+                    OutlinedButton(onClick = {
+                        controller.updateSettings(
+                            s.copy(monthEndCloseManagers = (s.monthEndCloseManagers + 1).coerceAtMost(4))
+                        )
+                    }) { Text("+") }
                 }
                 SettingSwitch("Voorkeur: 2 dagen achter elkaar vrij", s.preferTwoConsecutiveDaysOff) {
                     controller.updateSettings(s.copy(preferTwoConsecutiveDaysOff = it))
