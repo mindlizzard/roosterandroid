@@ -289,11 +289,12 @@ class AppController(private val storage: ScheduleStorage) {
         if (!employee.canWork(template.kind)) return "${employee.name} mag ${shiftKindLabel(template.kind)} niet werken"
         val specific = state.availability.lastOrNull { it.employeeId == employeeId && it.date == date }
         val weekly = state.weeklyAvailability.lastOrNull { it.employeeId == employeeId && it.weekday == d.dayOfWeek.value }
-        if (!(specific?.available ?: weekly?.available ?: true)) return "${employee.name} is niet beschikbaar"
-        val fixedKind = specific?.fixedShiftKind ?: weekly?.fixedShiftKind
+        val availabilityRule = specific ?: weekly
+        if (!(availabilityRule?.available ?: true)) return "${employee.name} is niet beschikbaar"
+        val fixedKind = availabilityRule?.fixedShiftKind
         if (fixedKind != null && fixedKind != template.kind) return "${employee.name} heeft die dag een andere vaste dienst"
-        val earliest = (specific?.earliestStart ?: weekly?.earliestStart)?.let { runCatching { java.time.LocalTime.parse(it) }.getOrNull() }
-        val latest = (specific?.latestEnd ?: weekly?.latestEnd)?.let { runCatching { java.time.LocalTime.parse(it) }.getOrNull() }
+        val earliest = availabilityRule?.earliestStart?.let { runCatching { java.time.LocalTime.parse(it) }.getOrNull() }
+        val latest = availabilityRule?.latestEnd?.let { runCatching { java.time.LocalTime.parse(it) }.getOrNull() }
         if (earliest != null && template.startTime().isBefore(earliest)) return "dienst begint vóór beschikbaarheid van ${employee.name}"
         if (latest != null) {
             val startDt = d.atTime(template.startTime())
@@ -441,7 +442,7 @@ class AppController(private val storage: ScheduleStorage) {
 
     fun generate() {
         val result = engine.generate(state)
-        commit(state.copy(assignments = result.assignments), "Rooster geoptimaliseerd met Solver v0.5.1")
+        commit(state.copy(assignments = result.assignments), "Rooster geoptimaliseerd met Solver v0.5.2")
         unfilled = result.unfilled
         plannerWarnings = result.warnings
     }
@@ -680,7 +681,7 @@ private fun TeamScreen(controller: AppController) {
                 val selectedEmployee = controller.state.employees[idx]
                 Card(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
                     Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("Beschikbaarheid / vaste dienst", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                        Text("Afwijking op specifieke datum", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)\n                        Text("Gebruik dit voor een afwijkende vrije dag of werktijd. Deze datumregel gaat volledig voor de vaste weekbeschikbaarheid.", style = MaterialTheme.typography.bodySmall)
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(selectedEmployee.name, modifier = Modifier.weight(1f))
                             OutlinedButton(onClick = { availabilityEmployeeIndex = (idx + 1) % controller.state.employees.size }) { Text("Volgende") }
@@ -775,55 +776,94 @@ private fun TeamScreen(controller: AppController) {
 private fun RecurringAvailabilityPanel(controller: AppController) {
     var employeeIndex by remember { mutableIntStateOf(0) }
     var weekday by remember { mutableIntStateOf(1) }
-    var available by remember { mutableStateOf(true) }
-    var earliest by remember { mutableStateOf("") }
-    var latest by remember { mutableStateOf("") }
 
     val employees = controller.state.employees
     if (employees.isEmpty()) return
+
     val idx = employeeIndex.coerceIn(0, employees.lastIndex)
     val employee = employees[idx]
     val dayNames = listOf("Ma", "Di", "Wo", "Do", "Vr", "Za", "Zo")
+    val fixedKinds = listOf<ShiftKind?>(
+        null,
+        ShiftKind.SETUP,
+        ShiftKind.DAY,
+        ShiftKind.MIDDLE,
+        ShiftKind.CLOSE
+    )
+
     val current = controller.state.weeklyAvailability.lastOrNull {
         it.employeeId == employee.id && it.weekday == weekday
     }
 
+    var available by remember(employee.id, weekday, current) {
+        mutableStateOf(current?.available ?: true)
+    }
+    var earliest by remember(employee.id, weekday, current) {
+        mutableStateOf(current?.earliestStart ?: "")
+    }
+    var latest by remember(employee.id, weekday, current) {
+        mutableStateOf(current?.latestEnd ?: "")
+    }
+    var fixedKindIndex by remember(employee.id, weekday, current) {
+        mutableIntStateOf(
+            fixedKinds.indexOf(current?.fixedShiftKind).let { if (it < 0) 0 else it }
+        )
+    }
+
     Card(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(
-                "Vaste weekbeschikbaarheid",
+                "Beschikbaarheid per manager",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold
             )
-            Text("Voor regels zoals ‘elke woensdag vrij’ of ‘zaterdag uiterlijk 19:00’. Een datumregel gaat altijd voor.")
+            Text(
+                "Stel per weekdag in of iemand kan werken en tussen welke tijden. " +
+                    "Niet ingesteld betekent de hele dag beschikbaar. Een specifieke datumregel gaat volledig voor deze weekregel."
+            )
+
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(employee.name, modifier = Modifier.weight(1f), fontWeight = FontWeight.Bold)
+                Column(Modifier.weight(1f)) {
+                    Text(employee.name, fontWeight = FontWeight.Bold)
+                    Text("Vaste weekbeschikbaarheid", style = MaterialTheme.typography.bodySmall)
+                }
                 OutlinedButton(onClick = {
                     employeeIndex = (idx + 1) % employees.size
-                    available = true
-                    earliest = ""
-                    latest = ""
-                }) { Text("Volgende") }
+                }) { Text("Volgende manager") }
             }
+
+            Text("Kies dag", fontWeight = FontWeight.SemiBold)
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                dayNames.forEachIndexed { i, label ->
+                dayNames.take(4).forEachIndexed { i, label ->
                     val d = i + 1
-                    if (d == weekday) {
-                        Button(onClick = { weekday = d }) { Text(label) }
+                    if (weekday == d) {
+                        Button(onClick = { weekday = d }, modifier = Modifier.weight(1f)) { Text(label) }
                     } else {
-                        OutlinedButton(onClick = {
-                            weekday = d
-                            val found = controller.state.weeklyAvailability.lastOrNull {
-                                it.employeeId == employee.id && it.weekday == d
-                            }
-                            available = found?.available ?: true
-                            earliest = found?.earliestStart ?: ""
-                            latest = found?.latestEnd ?: ""
-                        }) { Text(label) }
+                        OutlinedButton(onClick = { weekday = d }, modifier = Modifier.weight(1f)) { Text(label) }
                     }
                 }
             }
-            SettingSwitch("Beschikbaar", available) { available = it }
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                dayNames.drop(4).forEachIndexed { i, label ->
+                    val d = i + 5
+                    if (weekday == d) {
+                        Button(onClick = { weekday = d }, modifier = Modifier.weight(1f)) { Text(label) }
+                    } else {
+                        OutlinedButton(onClick = { weekday = d }, modifier = Modifier.weight(1f)) { Text(label) }
+                    }
+                }
+                Spacer(Modifier.weight(1f))
+            }
+
+            SettingSwitch("Beschikbaar op ${dayNames[weekday - 1]}", available) {
+                available = it
+                if (!it) {
+                    earliest = ""
+                    latest = ""
+                    fixedKindIndex = 0
+                }
+            }
+
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
                     value = earliest,
@@ -831,55 +871,95 @@ private fun RecurringAvailabilityPanel(controller: AppController) {
                     label = { Text("Vanaf") },
                     placeholder = { Text("09:00") },
                     modifier = Modifier.weight(1f),
-                    singleLine = true
+                    singleLine = true,
+                    enabled = available
                 )
                 OutlinedTextField(
                     value = latest,
                     onValueChange = { latest = it },
                     label = { Text("Tot") },
-                    placeholder = { Text("19:00") },
+                    placeholder = { Text("22:00") },
                     modifier = Modifier.weight(1f),
-                    singleLine = true
+                    singleLine = true,
+                    enabled = available
                 )
             }
-            current?.let {
+            Text(
+                "Laat Vanaf/Tot leeg als de manager die dag op elk tijdstip beschikbaar is.",
+                style = MaterialTheme.typography.bodySmall
+            )
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    "Opgeslagen ${dayNames[weekday - 1]}: " +
-                        if (!it.available) "niet beschikbaar"
-                        else listOfNotNull(
-                            it.earliestStart?.let { t -> "vanaf $t" },
-                            it.latestEnd?.let { t -> "tot $t" }
-                        ).ifEmpty { listOf("beschikbaar") }.joinToString(" • "),
-                    style = MaterialTheme.typography.bodySmall
+                    "Vaste dienst: ${fixedKinds[fixedKindIndex]?.let(::shiftKindLabel) ?: "geen"}",
+                    modifier = Modifier.weight(1f)
                 )
+                OutlinedButton(
+                    onClick = { fixedKindIndex = (fixedKindIndex + 1) % fixedKinds.size },
+                    enabled = available
+                ) { Text("Wijzig") }
             }
+
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(
                     onClick = {
-                        val okStart = earliest.isBlank() ||
+                        val okStart = !available || earliest.isBlank() ||
                             runCatching { java.time.LocalTime.parse(earliest) }.isSuccess
-                        val okEnd = latest.isBlank() ||
+                        val okEnd = !available || latest.isBlank() ||
                             runCatching { java.time.LocalTime.parse(latest) }.isSuccess
+
                         if (!okStart || !okEnd) {
-                            controller.showStatus("Gebruik tijden als HH:mm")
+                            controller.showStatus("Gebruik tijden als HH:mm, bijvoorbeeld 09:00")
                         } else {
                             controller.upsertWeeklyAvailability(
                                 WeeklyAvailability(
                                     employeeId = employee.id,
                                     weekday = weekday,
                                     available = available,
-                                    earliestStart = earliest.ifBlank { null },
-                                    latestEnd = latest.ifBlank { null }
+                                    earliestStart = if (available) earliest.ifBlank { null } else null,
+                                    latestEnd = if (available) latest.ifBlank { null } else null,
+                                    fixedShiftKind = if (available) fixedKinds[fixedKindIndex] else null
                                 )
+                            )
+                            controller.showStatus(
+                                "${employee.name}: ${dayNames[weekday - 1]} beschikbaarheid opgeslagen"
                             )
                         }
                     },
                     modifier = Modifier.weight(1f)
                 ) { Text("Opslaan") }
+
                 OutlinedButton(
-                    onClick = { controller.removeWeeklyAvailability(employee.id, weekday) },
+                    onClick = {
+                        controller.removeWeeklyAvailability(employee.id, weekday)
+                        controller.showStatus(
+                            "${employee.name}: ${dayNames[weekday - 1]} terug naar standaard beschikbaar"
+                        )
+                    },
                     modifier = Modifier.weight(1f)
-                ) { Text("Verwijder") }
+                ) { Text("Reset dag") }
+            }
+
+            HorizontalDivider()
+            Text("Weekoverzicht ${employee.name}", fontWeight = FontWeight.Bold)
+
+            (1..7).forEach { d ->
+                val rule = controller.state.weeklyAvailability.lastOrNull {
+                    it.employeeId == employee.id && it.weekday == d
+                }
+                val description = when {
+                    rule == null -> "hele dag beschikbaar (standaard)"
+                    !rule.available -> "niet beschikbaar"
+                    else -> listOfNotNull(
+                        rule.earliestStart?.let { "vanaf $it" },
+                        rule.latestEnd?.let { "tot $it" },
+                        rule.fixedShiftKind?.let { "vast ${shiftKindLabel(it)}" }
+                    ).ifEmpty { listOf("hele dag beschikbaar") }.joinToString(" • ")
+                }
+                Row(Modifier.fillMaxWidth()) {
+                    Text(dayNames[d - 1], modifier = Modifier.width(34.dp), fontWeight = FontWeight.SemiBold)
+                    Text(description, modifier = Modifier.weight(1f))
+                }
             }
         }
     }

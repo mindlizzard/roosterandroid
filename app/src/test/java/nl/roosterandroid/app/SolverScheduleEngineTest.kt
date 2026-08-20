@@ -295,4 +295,102 @@ class SolverScheduleEngineTest {
         })
     }
 
+
+    @Test
+    fun weeklyUnavailableDayIsRespected() {
+        val employee = Employee(
+            name = "A",
+            contractedDaysPerWeek = 0,
+            contractedHoursPerWeek = 0.0,
+            maxShiftsPerWeek = 7
+        )
+        val state = AppState(
+            year = 2026,
+            month = 6,
+            employees = listOf(employee),
+            weeklyAvailability = listOf(
+                WeeklyAvailability(employeeId = employee.id, weekday = 1, available = false)
+            ),
+            settings = leanSettings().copy(
+                requireSetupDaily = false,
+                requireCloseDaily = true
+            )
+        )
+        val result = ScheduleEngine().generate(state)
+        assertFalse(result.assignments.any {
+            it.employeeId == employee.id && it.date == "2026-06-01"
+        })
+    }
+
+    @Test
+    fun weeklyTimeWindowBlocksShiftOutsideAvailability() {
+        val employee = Employee(
+            name = "A",
+            contractedDaysPerWeek = 0,
+            contractedHoursPerWeek = 0.0,
+            maxShiftsPerWeek = 7
+        )
+        val state = AppState(
+            year = 2026,
+            month = 6,
+            employees = listOf(employee),
+            weeklyAvailability = listOf(
+                WeeklyAvailability(
+                    employeeId = employee.id,
+                    weekday = 1,
+                    available = true,
+                    earliestStart = "09:00",
+                    latestEnd = "17:00"
+                )
+            ),
+            settings = leanSettings().copy(
+                requireSetupDaily = false,
+                requireCloseDaily = true
+            )
+        )
+        val result = ScheduleEngine().generate(state)
+        assertFalse(result.assignments.any {
+            it.employeeId == employee.id && it.date == "2026-06-01"
+        })
+    }
+
+    @Test
+    fun specificDateRuleFullyOverridesWeeklyTimes() {
+        val employee = Employee(
+            name = "A",
+            contractedDaysPerWeek = 0,
+            contractedHoursPerWeek = 0.0,
+            maxShiftsPerWeek = 7
+        )
+        val state = AppState(
+            year = 2026,
+            month = 6,
+            employees = listOf(employee),
+            weeklyAvailability = listOf(
+                WeeklyAvailability(
+                    employeeId = employee.id,
+                    weekday = 1,
+                    available = true,
+                    earliestStart = "12:00",
+                    latestEnd = "20:00"
+                )
+            ),
+            availability = listOf(
+                Availability(
+                    employeeId = employee.id,
+                    date = "2026-06-01",
+                    available = true,
+                    fixedShiftKind = ShiftKind.DAY
+                )
+            ),
+            settings = leanSettings().copy(
+                requireSetupDaily = false,
+                requireCloseDaily = false
+            )
+        )
+        val result = ScheduleEngine().generate(state)
+        assertTrue(result.assignments.any {
+            it.employeeId == employee.id && it.date == "2026-06-01"
+        })
+    }
 }

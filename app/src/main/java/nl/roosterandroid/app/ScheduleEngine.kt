@@ -1267,16 +1267,17 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
             it.employeeId == employee.id && it.weekday == date.dayOfWeek.value
         }
 
-        val available = specific?.available ?: weekly?.available ?: true
+        val rule = specific ?: weekly
+        val available = rule?.available ?: true
         if (!available) return false
 
-        val fixedKind = specific?.fixedShiftKind ?: weekly?.fixedShiftKind
+        val fixedKind = rule?.fixedShiftKind
         if (fixedKind != null && fixedKind != template.kind) return false
 
-        val earliest = (specific?.earliestStart ?: weekly?.earliestStart)?.let {
+        val earliest = rule?.earliestStart?.let {
             runCatching { java.time.LocalTime.parse(it) }.getOrNull()
         }
-        val latest = (specific?.latestEnd ?: weekly?.latestEnd)?.let {
+        val latest = rule?.latestEnd?.let {
             runCatching { java.time.LocalTime.parse(it) }.getOrNull()
         }
 
