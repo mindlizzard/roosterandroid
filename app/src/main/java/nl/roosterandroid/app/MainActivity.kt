@@ -596,7 +596,7 @@ private fun RulesScreen(controller: AppController, onExport: () -> Unit, onImpor
                     ShiftTemplateEditor(
                         template = template,
                         onSave = controller::updateTemplate,
-                        onError = controller::setStatus
+                        onError = controller::showStatus
                     )
                 }
                 HorizontalDivider(Modifier.padding(vertical = 8.dp))
