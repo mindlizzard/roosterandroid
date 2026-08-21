@@ -17,6 +17,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -42,7 +43,8 @@ import java.time.YearMonth
 fun AdminScreen(controller: AppController) {
     val state = controller.state
     val ym = YearMonth.of(state.year, state.month)
-    val employees = state.employees.filter { it.active }
+    val locationId = state.activeLocationId
+    val employees = controller.activeEmployees()
     val stats = employeeMonthStats(state)
     val quality = rosterQualityScore(
         state,
@@ -76,6 +78,12 @@ fun AdminScreen(controller: AppController) {
     var guestCount by remember { mutableStateOf("") }
     var minimumManagers by remember { mutableIntStateOf(0) }
 
+    var coverageName by remember { mutableStateOf("Piekbezetting") }
+    var coverageStart by remember { mutableStateOf("11:00") }
+    var coverageEnd by remember { mutableStateOf("14:00") }
+    var coverageMinimum by remember { mutableIntStateOf(2) }
+    var coverageWeekdays by remember { mutableStateOf((1..7).toSet()) }
+
     var swapFirstIndex by remember { mutableIntStateOf(0) }
     var swapSecondIndex by remember { mutableIntStateOf(1) }
 
@@ -89,7 +97,11 @@ fun AdminScreen(controller: AppController) {
                 Text("${ym.month.name.lowercase().replaceFirstChar { it.uppercase() }} ${ym.year}")
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     AdminSummaryCard("Kwaliteit", "$quality/100", Modifier.weight(1f))
-                    AdminSummaryCard("Diensten", state.assignments.size.toString(), Modifier.weight(1f))
+                    AdminSummaryCard(
+                        "Diensten",
+                        state.assignments.count { it.locationId == locationId }.toString(),
+                        Modifier.weight(1f)
+                    )
                     AdminSummaryCard(
                         "ATW",
                         controller.violations.count { it.severity == AtwValidator.Severity.ERROR }.toString(),
@@ -101,11 +113,20 @@ fun AdminScreen(controller: AppController) {
 
         item { AdminSectionTitle("Uren per manager") }
         items(stats) { stat ->
+            val totalHours = stat.hours + stat.otherLocationHours
             AdminBar(
                 label = stat.name,
-                value = stat.hours,
-                maxValue = maxOf(1.0, stats.maxOfOrNull { it.hours } ?: 1.0),
-                suffix = "${"%.1f".format(stat.hours)}u / ${"%.1f".format(stat.targetHours)}u"
+                value = totalHours,
+                maxValue = maxOf(
+                    1.0,
+                    stats.maxOfOrNull { it.hours + it.otherLocationHours } ?: 1.0
+                ),
+                suffix = if (stat.otherLocationHours > 0.0) {
+                    "${"%.1f".format(stat.hours)}u hier + ${"%.1f".format(stat.otherLocationHours)}u elders / " +
+                        "${"%.1f".format(stat.targetHours)}u"
+                } else {
+                    "${"%.1f".format(stat.hours)}u / ${"%.1f".format(stat.targetHours)}u"
+                }
             )
         }
 
@@ -114,8 +135,11 @@ fun AdminScreen(controller: AppController) {
             Card(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
                 Column(Modifier.padding(12.dp)) {
                     Text(stat.name, fontWeight = FontWeight.Bold)
-                    Text("SET ${stat.setup} • DAG ${stat.day} • TUS ${stat.middle} • SLU ${stat.close}")
-                    Text("Weekend ${stat.weekend} • diensten ${stat.shifts} • +/- ${"%.1f".format(stat.hours - stat.targetHours)}u")
+                    Text("SET ${stat.setup} • DAG ${stat.day} • TUS ${stat.middle} • SLU ${stat.close} • NAC ${stat.night}")
+                    Text(
+                        "Weekend ${stat.weekend} • diensten ${stat.shifts} • totaal +/- " +
+                            "${"%.1f".format(stat.hours + stat.otherLocationHours - stat.targetHours)}u"
+                    )
                     Text("Vak ${stat.vacationDays} • Verlof ${stat.leaveDays} • Ziek ${stat.sickDays}")
                 }
             }
@@ -140,8 +164,8 @@ fun AdminScreen(controller: AppController) {
                             absenceStatusIndex = (absenceStatusIndex + 1) % statuses.size
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedTextField(absenceStart, { absenceStart = it }, label = { Text("Van") }, modifier = Modifier.weight(1f))
-                            OutlinedTextField(absenceEnd, { absenceEnd = it }, label = { Text("Tot") }, modifier = Modifier.weight(1f))
+                            DatePickerField(absenceStart, { absenceStart = it }, "Van", Modifier.weight(1f))
+                            DatePickerField(absenceEnd, { absenceEnd = it }, "Tot", Modifier.weight(1f))
                         }
                         OutlinedTextField(absenceNote, { absenceNote = it }, label = { Text("Opmerking") }, modifier = Modifier.fillMaxWidth())
                         Button(
@@ -173,7 +197,8 @@ fun AdminScreen(controller: AppController) {
             val absencesThisMonth = state.absences.filter { absence ->
                 val start = runCatching { LocalDate.parse(absence.startDate) }.getOrNull()
                 val end = runCatching { LocalDate.parse(absence.endDate) }.getOrNull()
-                start != null && end != null &&
+                absence.employeeId in employees.map { it.id }.toSet() &&
+                    start != null && end != null &&
                     !end.isBefore(ym.atDay(1)) && !start.isAfter(ym.atEndOfMonth())
             }
             items(absencesThisMonth) { absence ->
@@ -186,6 +211,57 @@ fun AdminScreen(controller: AppController) {
                         }
                         IconButton(onClick = { controller.removeAbsence(absence.id) }) {
                             Icon(Icons.Default.Delete, contentDescription = "Verwijder")
+                        }
+                    }
+                }
+            }
+
+            val openReplacements = state.replacementRequests.filter {
+                it.locationId == locationId && it.status == ReplacementStatus.OPEN
+            }.sortedBy { it.date }
+            if (openReplacements.isNotEmpty()) {
+                item { AdminSectionTitle("Open diensten en vervangers") }
+                items(openReplacements, key = { it.id }) { request ->
+                    val original = state.employees.firstOrNull {
+                        it.id == request.originalEmployeeId
+                    }?.name ?: "Onbekend"
+                    val template = state.shiftTemplates.firstOrNull {
+                        it.id == request.shiftTemplateId
+                    }
+                    val candidates = controller.replacementCandidates(request.id).take(4)
+                    Card(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
+                        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(
+                                "${request.date} • ${template?.name ?: "Dienst"}",
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text("$original is ${absenceLabel(request.absenceType).lowercase()}")
+                            if (candidates.isEmpty()) {
+                                Text(
+                                    "Geen beschikbare vervanger zonder beschikbaarheids- of ATW-conflict.",
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                            } else {
+                                Text("Beste vervangers", fontWeight = FontWeight.SemiBold)
+                                candidates.forEach { candidate ->
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Column(Modifier.weight(1f)) {
+                                            Text(candidate.name)
+                                            Text(
+                                                "${candidate.role.name} • ${candidate.plannedShiftsThisMonth} diensten deze maand",
+                                                style = MaterialTheme.typography.bodySmall
+                                            )
+                                        }
+                                        Button(onClick = {
+                                            controller.assignReplacement(request.id, candidate.employeeId)
+                                        }) { Text("Inplannen") }
+                                    }
+                                }
+                            }
+                            OutlinedButton(
+                                onClick = { controller.cancelReplacement(request.id) },
+                                modifier = Modifier.fillMaxWidth()
+                            ) { Text("Sluiten zonder vervanger") }
                         }
                     }
                 }
@@ -228,7 +304,7 @@ fun AdminScreen(controller: AppController) {
                                 }
                             }
                             RecurrenceType.SPECIFIC_DATE -> {
-                                OutlinedTextField(taskDate, { taskDate = it }, label = { Text("Datum") }, modifier = Modifier.fillMaxWidth())
+                                DatePickerField(taskDate, { taskDate = it }, "Datum", Modifier.fillMaxWidth())
                             }
                             RecurrenceType.MONTH_END -> Unit
                         }
@@ -258,7 +334,7 @@ fun AdminScreen(controller: AppController) {
                 }
             }
 
-            items(state.responsibilities.filter { it.active }) { rule ->
+            items(state.responsibilities.filter { it.active && it.locationId == locationId }) { rule ->
                 val employee = state.employees.firstOrNull { it.id == rule.employeeId }
                 Card(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 3.dp)) {
                     Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -286,7 +362,7 @@ fun AdminScreen(controller: AppController) {
                         AdminCycleRow(personMarkerLabel(types[markerTypeIndex]), "Type") {
                             markerTypeIndex = (markerTypeIndex + 1) % types.size
                         }
-                        OutlinedTextField(markerDate, { markerDate = it }, label = { Text("Datum") }, modifier = Modifier.fillMaxWidth())
+                        DatePickerField(markerDate, { markerDate = it }, "Datum", Modifier.fillMaxWidth())
                         OutlinedTextField(markerNote, { markerNote = it }, label = { Text("Opmerking") }, modifier = Modifier.fillMaxWidth())
                         Button(
                             onClick = {
@@ -315,7 +391,7 @@ fun AdminScreen(controller: AppController) {
                             "Alleen 'minimum managers' kan extra bezetting toevoegen. Weektelling, admin, onderhoud enz. doen dat nooit.",
                             style = MaterialTheme.typography.bodySmall
                         )
-                        OutlinedTextField(demandDate, { demandDate = it }, label = { Text("Datum") }, modifier = Modifier.fillMaxWidth())
+                        DatePickerField(demandDate, { demandDate = it }, "Datum", Modifier.fillMaxWidth())
                         OutlinedTextField(
                             guestCount,
                             { guestCount = it.filter(Char::isDigit) },
@@ -345,7 +421,111 @@ fun AdminScreen(controller: AppController) {
                 }
             }
 
-            val assignments = state.assignments.sortedBy { it.date }
+            item { AdminSectionTitle("Bezetting per dagdeel") }
+            item {
+                Card(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
+                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            "Stel terugkerende tijdvakken in, bijvoorbeeld lunch 11:00–14:00 met minimaal 2 managers. " +
+                                "Tijdvakken na middernacht en 24-uursvestigingen worden ondersteund.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        OutlinedTextField(
+                            coverageName,
+                            { coverageName = it },
+                            label = { Text("Naam tijdvak") },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            TimePickerField(
+                                value = coverageStart,
+                                onValueChange = { coverageStart = it },
+                                label = "Van",
+                                modifier = Modifier.weight(1f),
+                                fallback = java.time.LocalTime.of(11, 0)
+                            )
+                            TimePickerField(
+                                value = coverageEnd,
+                                onValueChange = { coverageEnd = it },
+                                label = "Tot",
+                                modifier = Modifier.weight(1f),
+                                fallback = java.time.LocalTime.of(14, 0)
+                            )
+                        }
+                        val dayLabels = listOf("Ma", "Di", "Wo", "Do", "Vr", "Za", "Zo")
+                        dayLabels.chunked(4).forEachIndexed { rowIndex, labels ->
+                            Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                                labels.forEachIndexed { columnIndex, label ->
+                                    val weekday = rowIndex * 4 + columnIndex + 1
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Checkbox(
+                                            checked = weekday in coverageWeekdays,
+                                            onCheckedChange = { checked ->
+                                                coverageWeekdays = if (checked) {
+                                                    coverageWeekdays + weekday
+                                                } else {
+                                                    coverageWeekdays - weekday
+                                                }
+                                            }
+                                        )
+                                        Text(label)
+                                    }
+                                }
+                            }
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("Minimum managers: $coverageMinimum", Modifier.weight(1f))
+                            OutlinedButton(onClick = {
+                                coverageMinimum = (coverageMinimum - 1).coerceAtLeast(1)
+                            }) { Text("−") }
+                            OutlinedButton(onClick = {
+                                coverageMinimum = (coverageMinimum + 1).coerceAtMost(10)
+                            }) { Text("+") }
+                        }
+                        Button(
+                            onClick = {
+                                controller.upsertStaffingRequirement(
+                                    StaffingRequirement(
+                                        locationId = locationId,
+                                        name = coverageName,
+                                        weekdays = coverageWeekdays,
+                                        start = coverageStart,
+                                        end = coverageEnd,
+                                        minimumManagers = coverageMinimum
+                                    )
+                                )
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) { Text("Tijdvak opslaan") }
+                    }
+                }
+            }
+
+            items(
+                state.staffingRequirements.filter {
+                    it.locationId == locationId && it.active
+                },
+                key = { it.id }
+            ) { requirement ->
+                Card(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 3.dp)) {
+                    Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(requirement.name, fontWeight = FontWeight.Bold)
+                            Text(
+                                "${requirement.start}–${requirement.end} • min. ${requirement.minimumManagers} • " +
+                                    requirement.weekdays.sorted().joinToString("/")
+                            )
+                        }
+                        IconButton(onClick = { controller.removeStaffingRequirement(requirement.id) }) {
+                            Icon(Icons.Default.Delete, contentDescription = "Verwijder tijdvak")
+                        }
+                    }
+                }
+            }
+
+            val assignments = state.assignments
+                .filter { it.locationId == locationId }
+                .sortedBy { it.date }
             if (assignments.size >= 2) {
                 item { AdminSectionTitle("Dienst ruilen") }
                 item {
@@ -392,8 +572,10 @@ fun AdminScreen(controller: AppController) {
 
 private fun assignmentText(state: AppState, a: Assignment): String {
     val e = state.employees.firstOrNull { it.id == a.employeeId }?.name ?: "?"
-    val t = state.shiftTemplates.firstOrNull { it.id == a.shiftTemplateId }?.name ?: "?"
-    return "${a.date} • $e • $t"
+    val template = state.shiftTemplates.firstOrNull { it.id == a.shiftTemplateId }
+    val t = template?.name ?: "?"
+    val times = template?.let { " ${it.start}-${it.end}" }.orEmpty()
+    return "${a.date} • $e • $t$times"
 }
 
 fun responsibilityApplies(

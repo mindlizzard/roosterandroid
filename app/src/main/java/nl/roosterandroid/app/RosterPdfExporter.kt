@@ -44,14 +44,15 @@ object RosterPdfExporter {
 
     private fun drawRosterPage(canvas: Canvas, state: AppState) {
         val ym = YearMonth.of(state.year, state.month)
-        val employees = state.employees.filter { it.active }
-        val templates = state.shiftTemplates.associateBy { it.id }
+        val location = state.activeLocation()
+        val employees = state.employees.filter { it.active && it.worksAt(location.id) }
+        val templates = state.shiftTemplates.filter { it.locationId == location.id }.associateBy { it.id }
         val locale = Locale("nl", "NL")
 
         val titlePaint = paint(15f, true, Color.BLACK)
         val subPaint = paint(8f, false, Color.DKGRAY)
         canvas.drawText("Rooster - ${monthLabel(ym, locale)}", MARGIN, 24f, titlePaint)
-        canvas.drawText(state.settings.locationName, MARGIN, 38f, subPaint)
+        canvas.drawText(location.name, MARGIN, 38f, subPaint)
 
         val tableTop = 52f
         val tableBottom = PAGE_HEIGHT - 18f
@@ -111,7 +112,9 @@ object RosterPdfExporter {
                         it.includes(date)
                 }
                 val assignment = state.assignments.lastOrNull {
-                    it.employeeId == employee.id && it.date == date.toString()
+                    it.locationId == location.id &&
+                        it.employeeId == employee.id &&
+                        it.date == date.toString()
                 }
                 val template = assignment?.let { templates[it.shiftTemplateId] }
                 val specific = state.availability.lastOrNull {
@@ -123,16 +126,21 @@ object RosterPdfExporter {
                 val unavailable = specific?.available == false || (specific == null && weekly?.available == false)
                 val extras = mutableListOf<String>()
                 state.responsibilities.filter {
-                    it.active && it.employeeId == employee.id && responsibilityAppliesPdf(it, date, ym)
+                    it.active &&
+                        it.locationId == location.id &&
+                        it.employeeId == employee.id &&
+                        responsibilityAppliesPdf(it, date, ym)
                 }.forEach { extras += responsibilityShortPdf(it) }
                 state.personMarkers.filter {
-                    it.employeeId == employee.id && it.date == date.toString()
+                    it.locationId == location.id &&
+                        it.employeeId == employee.id &&
+                        it.date == date.toString()
                 }.forEach { extras += markerShortPdf(it.type) }
 
                 val text = when {
                     absence != null -> absenceShortPdf(absence.type)
                     template != null -> {
-                        val base = "${shiftCode(template.kind)} ${shortTime(template.start)}-${shortTime(template.end)}"
+                        val base = "${shiftCode(template.kind)} ${template.start}-${template.end}"
                         if (extras.isEmpty()) base else "$base ${extras.distinct().joinToString("/")}" 
                     }
                     unavailable -> "NIET BESCH."
@@ -173,8 +181,9 @@ object RosterPdfExporter {
 
     private fun drawPayrollPage(canvas: Canvas, state: AppState) {
         val ym = YearMonth.of(state.year, state.month)
-        val employees = state.employees.filter { it.active }
-        val templates = state.shiftTemplates.associateBy { it.id }
+        val location = state.activeLocation()
+        val employees = state.employees.filter { it.active && it.worksAt(location.id) }
+        val templates = state.shiftTemplates.filter { it.locationId == location.id }.associateBy { it.id }
         val locale = Locale("nl", "NL")
 
         canvas.drawText(
@@ -184,7 +193,7 @@ object RosterPdfExporter {
             paint(15f, true, Color.BLACK)
         )
         canvas.drawText(
-            "Geplande uren komen uit het rooster. Afwezigheidsuren zijn indicatief: geregistreerde dagen x gemiddelde contracturen per werkdag.",
+            "${location.name} • geplande uren komen uit dit vestigingsrooster. Afwezigheidsuren zijn indicatief.",
             MARGIN,
             39f,
             paint(7f, false, Color.DKGRAY)
@@ -194,7 +203,8 @@ object RosterPdfExporter {
             Col("Naam", 120f),
             Col("Rol", 42f),
             Col("Contract", 68f),
-            Col("Gepland", 58f),
+            Col("Hier", 50f),
+            Col("Elders", 50f),
             Col("Doel", 58f),
             Col("+/-", 48f),
             Col("Dnst", 34f),
@@ -203,6 +213,7 @@ object RosterPdfExporter {
             Col("DAG", 30f),
             Col("TUS", 30f),
             Col("SLU", 30f),
+            Col("NAC", 30f),
             Col("Vak", 34f),
             Col("Snip", 34f),
             Col("Ver", 34f),
@@ -223,12 +234,21 @@ object RosterPdfExporter {
         y += summaryHeaderH
 
         employees.forEach { employee ->
-            val assignments = state.assignments.filter {
-                it.employeeId == employee.id && isInMonth(it.date, ym)
-            }
+            val allMonthAssignments = (state.assignments + state.assignmentHistory)
+                .distinctBy { it.id }
+                .filter {
+                    it.employeeId == employee.id && isInMonth(it.date, ym)
+                }
+            val assignments = allMonthAssignments.filter { it.locationId == location.id }
             val plannedHours = assignments.sumOf { assignment ->
                 templates[assignment.shiftTemplateId]?.let(::durationHours) ?: 0.0
             }
+            val allTemplates = state.shiftTemplates.associateBy { it.id }
+            val otherLocationHours = allMonthAssignments
+                .filter { it.locationId != location.id }
+                .sumOf { assignment ->
+                    allTemplates[assignment.shiftTemplateId]?.let(::durationHours) ?: 0.0
+                }
             val targetHours = employee.contractedHoursPerWeek * ym.lengthOfMonth() / 7.0
             val kinds = assignments.mapNotNull { templates[it.shiftTemplateId]?.kind }
             val weekend = assignments.count { assignment ->
@@ -241,14 +261,16 @@ object RosterPdfExporter {
                 roleShort(employee.role),
                 "${fmt(employee.contractedHoursPerWeek)}u/${employee.contractedDaysPerWeek}d",
                 "${fmt(plannedHours)}u",
+                "${fmt(otherLocationHours)}u",
                 "${fmt(targetHours)}u",
-                signedHours(plannedHours - targetHours),
+                signedHours(plannedHours + otherLocationHours - targetHours),
                 assignments.size.toString(),
                 weekend.toString(),
                 kinds.count { it == ShiftKind.SETUP }.toString(),
                 kinds.count { it == ShiftKind.DAY }.toString(),
                 kinds.count { it == ShiftKind.MIDDLE }.toString(),
                 kinds.count { it == ShiftKind.CLOSE }.toString(),
+                kinds.count { it == ShiftKind.NIGHT }.toString(),
                 approvedDays[AbsenceType.VACATION].orZero().toString(),
                 approvedDays[AbsenceType.SNIPPER_DAY].orZero().toString(),
                 approvedDays[AbsenceType.LEAVE].orZero().toString(),
@@ -280,7 +302,9 @@ object RosterPdfExporter {
             Col("Opmerking", 500f)
         )
         val records = state.absences
-            .filter { overlapsMonth(it, ym) }
+            .filter { absence ->
+                absence.employeeId in employees.map { it.id }.toSet() && overlapsMonth(absence, ym)
+            }
             .sortedWith(compareBy<Absence>({ employeeName(state, it.employeeId) }, { it.startDate }, { it.type.name }))
         val detailHeaderH = 20f
         drawTableHeader(canvas, MARGIN, y, detailHeaderH, detailColumns)
@@ -322,14 +346,28 @@ object RosterPdfExporter {
             }
         }
 
+        val allTemplates = state.shiftTemplates.associateBy { it.id }
         val totalPlanned = employees.sumOf { employee ->
-            state.assignments.filter { it.employeeId == employee.id && isInMonth(it.date, ym) }
+            (state.assignments + state.assignmentHistory).distinctBy { it.id }.filter {
+                it.locationId == location.id &&
+                    it.employeeId == employee.id &&
+                    isInMonth(it.date, ym)
+            }
                 .sumOf { a -> templates[a.shiftTemplateId]?.let(::durationHours) ?: 0.0 }
+        }
+        val totalOther = employees.sumOf { employee ->
+            (state.assignments + state.assignmentHistory).distinctBy { it.id }.filter {
+                it.locationId != location.id &&
+                    it.employeeId == employee.id &&
+                    isInMonth(it.date, ym)
+            }.sumOf { a -> allTemplates[a.shiftTemplateId]?.let(::durationHours) ?: 0.0 }
         }
         val totalTarget = employees.filter { it.role != EmployeeRole.BORROWED }
             .sumOf { it.contractedHoursPerWeek * ym.lengthOfMonth() / 7.0 }
         canvas.drawText(
-            "Totaal geplande uren: ${fmt(totalPlanned)}u    Contractdoel eigen team: ${fmt(totalTarget)}u    Verschil: ${signedHours(totalPlanned - totalTarget)}",
+            "Totaal hier: ${fmt(totalPlanned)}u    Elders: ${fmt(totalOther)}u    " +
+                "Contractdoel eigen team: ${fmt(totalTarget)}u    " +
+                "Verschil totaal: ${signedHours(totalPlanned + totalOther - totalTarget)}",
             MARGIN,
             PAGE_HEIGHT - 12f,
             paint(7f, true, Color.DKGRAY)
@@ -450,6 +488,7 @@ object RosterPdfExporter {
         ShiftKind.DAY -> "DAG"
         ShiftKind.MIDDLE -> "TUS"
         ShiftKind.CLOSE -> "SLU"
+        ShiftKind.NIGHT -> "NAC"
         ShiftKind.KPI -> "KPI"
         ShiftKind.CUSTOM -> "DST"
     }
@@ -459,6 +498,7 @@ object RosterPdfExporter {
         ShiftKind.DAY -> rgb("d8ebfa")
         ShiftKind.MIDDLE -> rgb("ffe4b5")
         ShiftKind.CLOSE -> rgb("e6dcf7")
+        ShiftKind.NIGHT -> rgb("cdd3f6")
         ShiftKind.KPI -> rgb("d7f2ef")
         ShiftKind.CUSTOM -> rgb("f5ddec")
     }
@@ -558,19 +598,30 @@ object RosterPdfExporter {
 
     private fun dayDetailsPdf(state: AppState, date: LocalDate, ym: YearMonth): String {
         val parts = mutableListOf<String>()
-        state.dayNotes.firstOrNull { it.date == date.toString() }?.text?.takeIf { it.isNotBlank() }?.let(parts::add)
-        state.responsibilities.filter { it.active && responsibilityAppliesPdf(it, date, ym) }.forEach { rule ->
+        val locationId = state.activeLocationId
+        state.dayNotes.firstOrNull {
+            it.locationId == locationId && it.date == date.toString()
+        }?.text?.takeIf { it.isNotBlank() }?.let(parts::add)
+        state.responsibilities.filter {
+            it.active && it.locationId == locationId && responsibilityAppliesPdf(it, date, ym)
+        }.forEach { rule ->
             val name = employeeName(state, rule.employeeId)
             parts += "${responsibilityShortPdf(rule)}: $name"
         }
-        state.personMarkers.filter { it.date == date.toString() }.forEach { marker ->
+        state.personMarkers.filter {
+            it.locationId == locationId && it.date == date.toString()
+        }.forEach { marker ->
             parts += "${markerShortPdf(marker.type)}: ${employeeName(state, marker.employeeId)}"
         }
         if (state.settings.showMonthCountOnLastDay && date == ym.atEndOfMonth() &&
-            state.responsibilities.none { it.active && it.type == ResponsibilityType.MONTH_COUNT && responsibilityAppliesPdf(it, date, ym) }
+            state.responsibilities.none {
+                it.active && it.locationId == locationId && it.type == ResponsibilityType.MONTH_COUNT && responsibilityAppliesPdf(it, date, ym)
+            }
         ) parts += "Maandtelling"
         if (state.settings.showWeeklyCount && date.dayOfWeek.value == state.settings.weekCountWeekday &&
-            state.responsibilities.none { it.active && it.type == ResponsibilityType.WEEK_COUNT && responsibilityAppliesPdf(it, date, ym) }
+            state.responsibilities.none {
+                it.active && it.locationId == locationId && it.type == ResponsibilityType.WEEK_COUNT && responsibilityAppliesPdf(it, date, ym)
+            }
         ) parts += "Weektelling"
         return parts.distinct().joinToString(" | ")
     }
@@ -603,13 +654,11 @@ object RosterPdfExporter {
     private fun employeeName(state: AppState, employeeId: String): String =
         state.employees.firstOrNull { it.id == employeeId }?.name ?: "?"
 
-    private fun durationHours(template: ShiftTemplate): Double {
+    private fun durationHours(template: ShiftTemplate): Double = runCatching {
         var minutes = Duration.between(template.startTime(), template.endTime()).toMinutes()
         if (minutes <= 0) minutes += 24 * 60
-        return minutes / 60.0
-    }
-
-    private fun shortTime(value: String): String = value.removeSuffix(":00")
+        minutes / 60.0
+    }.getOrDefault(0.0)
 
     private fun isInMonth(dateString: String, ym: YearMonth): Boolean =
         runCatching { YearMonth.from(LocalDate.parse(dateString)) == ym }.getOrDefault(false)

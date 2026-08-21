@@ -34,14 +34,45 @@ class AtwValidator {
         val employees = state.employees.associateBy { it.id }
         val templates = state.shiftTemplates.associateBy { it.id }
         val allAssignments = (state.assignmentHistory + state.assignments).distinctBy { it.id }
+        val out = mutableListOf<Violation>()
 
         val shifts = allAssignments.mapNotNull { a ->
-            val employee = employees[a.employeeId] ?: return@mapNotNull null
-            val template = templates[a.shiftTemplateId] ?: return@mapNotNull null
-            toScheduledShift(a, employee, template)
+            val date = runCatching { LocalDate.parse(a.date) }.getOrNull()
+            val employee = employees[a.employeeId]
+            if (employee == null) {
+                out += Violation(
+                    Severity.ERROR,
+                    a.employeeId,
+                    date,
+                    "Ongeldige roosterdata",
+                    "Een dienst verwijst naar een manager die niet meer bestaat."
+                )
+                return@mapNotNull null
+            }
+            val template = templates[a.shiftTemplateId]
+            if (template == null) {
+                out += Violation(
+                    Severity.ERROR,
+                    employee.id,
+                    date,
+                    "Ongeldige roosterdata",
+                    "${employee.name}: diensttemplate ontbreekt."
+                )
+                return@mapNotNull null
+            }
+            runCatching { toScheduledShift(a, employee, template) }
+                .getOrElse {
+                    out += Violation(
+                        Severity.ERROR,
+                        employee.id,
+                        date,
+                        "Ongeldige roosterdata",
+                        "${employee.name}: controleer datum en tijden van ${template.name}."
+                    )
+                    null
+                }
         }.sortedBy { it.start }
 
-        val out = mutableListOf<Violation>()
         shifts.groupBy { it.employee.id }.forEach { (employeeId, employeeShifts) ->
             val sorted = employeeShifts.sortedBy { it.start }
             checkShiftLengthsAndBreaks(sorted, out)
@@ -65,11 +96,17 @@ class AtwValidator {
         existing: List<ScheduledShift>,
         settings: PlannerSettings
     ): Boolean {
-        val candidate = toScheduledShift(
-            Assignment(employeeId = employee.id, date = date.toString(), shiftTemplateId = template.id),
-            employee,
-            template
-        )
+        val candidate = runCatching {
+            toScheduledShift(
+                Assignment(
+                    employeeId = employee.id,
+                    date = date.toString(),
+                    shiftTemplateId = template.id
+                ),
+                employee,
+                template
+            )
+        }.getOrNull() ?: return false
         if (candidate.durationHours > 12.0) return false
         if (existing.any { overlaps(it.start, it.end, candidate.start, candidate.end) }) return false
 

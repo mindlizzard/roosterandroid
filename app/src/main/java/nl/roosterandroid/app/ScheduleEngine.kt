@@ -44,68 +44,118 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
         private const val ATTEMPTS_WITH_BORROWED = 28
     }
 
-    fun generate(state: AppState): Result {
+    fun generate(
+        state: AppState,
+        searchEffort: Int = 1,
+        shouldCancel: () -> Boolean = { false }
+    ): Result {
         val ym = YearMonth.of(state.year, state.month)
-        val employees = state.employees.filter { it.active }
+        val locationId = state.activeLocationId
+        val effort = searchEffort.coerceIn(1, 4)
+        val employees = state.employees.filter { it.active && it.worksAt(locationId) }
         if (employees.isEmpty()) {
-            return Result(emptyList(), listOf("Voeg eerst minimaal één manager toe."), emptyList())
+            return Result(emptyList(), listOf("Voeg eerst minimaal één manager aan deze vestiging toe."), emptyList())
         }
 
-        val history = (state.assignmentHistory + state.assignments.filterNot { isInMonth(it, ym) })
+        val history = (
+            state.assignmentHistory + state.assignments.filter {
+                it.locationId != locationId || !isInMonth(it, ym)
+            }
+            )
             .distinctBy { it.id }
 
-        val locked = state.assignments
-            .filter { isInMonth(it, ym) && it.source.startsWith("manual") }
+        val currentMonthAssignments = state.assignments
+            .filter {
+                it.locationId == locationId &&
+                    isInMonth(it, ym)
+            }
             .filterNot { assignment ->
                 val date = runCatching { LocalDate.parse(assignment.date) }.getOrNull()
                 date != null && approvedAbsence(state, assignment.employeeId, date)
             }
             .distinctBy { "${it.employeeId}|${it.date}" }
 
+        val hardLocked = currentMonthAssignments.filter {
+            it.effectiveLockMode() == AssignmentLockMode.FIXED
+        }
+        val preferred = currentMonthAssignments.filter {
+            it.effectiveLockMode() == AssignmentLockMode.PREFERRED
+        }
         val ownEmployees = employees.filter { it.role != EmployeeRole.BORROWED }
         val hasBorrowed = employees.any { it.role == EmployeeRole.BORROWED }
-        val lockedBorrowed = locked.any { assignment ->
-            state.employees.firstOrNull { it.id == assignment.employeeId }?.role == EmployeeRole.BORROWED
-        }
 
-        var bestOwn: Attempt? = null
-        if (ownEmployees.isNotEmpty() && !lockedBorrowed) {
-            repeat(ATTEMPTS_WITHOUT_BORROWED) { attemptIndex ->
-                val attempt = buildAttempt(
-                    state = state,
-                    ym = ym,
-                    employees = ownEmployees,
-                    history = history,
-                    locked = locked.filter { assignment ->
-                        state.employees.firstOrNull { it.id == assignment.employeeId }?.role != EmployeeRole.BORROWED
-                    },
-                    attemptIndex = attemptIndex
-                )
-                if (bestOwn == null || attempt.score < bestOwn!!.score) {
-                    bestOwn = attempt
+        fun solve(locked: List<Assignment>, attemptOffset: Int): Attempt? {
+            val lockedBorrowed = locked.any { assignment ->
+                state.employees.firstOrNull {
+                    it.id == assignment.employeeId
+                }?.role == EmployeeRole.BORROWED
+            }
+            var bestOwn: Attempt? = null
+            if (ownEmployees.isNotEmpty() && !lockedBorrowed) {
+                for (attemptIndex in 0 until ATTEMPTS_WITHOUT_BORROWED * effort) {
+                    if (shouldCancel()) break
+                    val attempt = buildAttempt(
+                        state = state,
+                        ym = ym,
+                        employees = ownEmployees,
+                        history = history,
+                        locked = locked.filter { assignment ->
+                            state.employees.firstOrNull {
+                                it.id == assignment.employeeId
+                            }?.role != EmployeeRole.BORROWED
+                        },
+                        attemptIndex = attemptOffset + attemptIndex
+                    )
+                    if (bestOwn == null || attempt.score < bestOwn!!.score) {
+                        bestOwn = attempt
+                    }
                 }
+            }
+
+            return if (!lockedBorrowed && (!hasBorrowed || bestOwn?.feasibleCore == true)) {
+                bestOwn
+            } else {
+                var bestWithBorrowed: Attempt? = null
+                for (attemptIndex in 0 until ATTEMPTS_WITH_BORROWED * effort) {
+                    if (shouldCancel()) break
+                    val attempt = buildAttempt(
+                        state = state,
+                        ym = ym,
+                        employees = employees,
+                        history = history,
+                        locked = locked,
+                        attemptIndex = attemptOffset + 1000 + attemptIndex
+                    )
+                    if (bestWithBorrowed == null || attempt.score < bestWithBorrowed!!.score) {
+                        bestWithBorrowed = attempt
+                    }
+                }
+                bestWithBorrowed ?: bestOwn
             }
         }
 
-        val winner = if (!lockedBorrowed && (!hasBorrowed || bestOwn?.feasibleCore == true)) {
-            bestOwn
+        val withPreferences = solve(
+            locked = (hardLocked + preferred).distinctBy { "${it.employeeId}|${it.date}" },
+            attemptOffset = 0
+        )
+        val flexible = if (preferred.isEmpty()) {
+            null
         } else {
-            var bestWithBorrowed: Attempt? = null
-            repeat(ATTEMPTS_WITH_BORROWED) { attemptIndex ->
-                val attempt = buildAttempt(
-                    state = state,
-                    ym = ym,
-                    employees = employees,
-                    history = history,
-                    locked = locked,
-                    attemptIndex = 1000 + attemptIndex
-                )
-                if (bestWithBorrowed == null || attempt.score < bestWithBorrowed!!.score) {
-                    bestWithBorrowed = attempt
-                }
-            }
-            bestWithBorrowed ?: bestOwn
-        } ?: return Result(locked, emptyList(), emptyList())
+            solve(locked = hardLocked, attemptOffset = 5000)
+        }
+        val preferredKeys = preferred.map {
+            "${it.employeeId}|${it.date}|${it.shiftTemplateId}"
+        }.toSet()
+        fun adjustedScore(attempt: Attempt): Double {
+            val resultKeys = attempt.assignments.map {
+                "${it.employeeId}|${it.date}|${it.shiftTemplateId}"
+            }.toSet()
+            val movedPreferences = (preferredKeys - resultKeys).size
+            return attempt.score + movedPreferences * 5_000_000.0
+        }
+        val winner = listOfNotNull(withPreferences, flexible)
+            .minByOrNull(::adjustedScore)
+            ?: return Result(hardLocked, emptyList(), emptyList())
 
         return Result(
             assignments = winner.assignments.sortedWith(
@@ -176,10 +226,22 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
                     employeeId = chosen.employee.id,
                     date = slot.date.toString(),
                     shiftTemplateId = chosen.template.id,
-                    source = "solver-core"
+                    source = "solver-core",
+                    locationId = state.activeLocationId
                 )
             }
         }
+
+        fillTimeCoverage(
+            state = state,
+            ym = ym,
+            employees = employees,
+            history = history,
+            generated = generated,
+            protectedOff = protectedOff,
+            unfilled = unfilled,
+            random = random
+        )
 
         fillContractTargets(
             state = state,
@@ -255,6 +317,9 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
         fixedRules.forEach { (date, rule) ->
             val employee = employees.firstOrNull { it.id == rule.employeeId } ?: return@forEach
             val kind = rule.fixedShiftKind ?: return@forEach
+            if (history.any { it.employeeId == employee.id && it.date == date.toString() }) {
+                return@forEach
+            }
             val existing = generated.lastOrNull {
                 it.employeeId == employee.id && it.date == date.toString()
             }
@@ -298,7 +363,8 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
                     employeeId = employee.id,
                     date = date.toString(),
                     shiftTemplateId = chosen.template.id,
-                    source = "fixed"
+                    source = "fixed",
+                    locationId = state.activeLocationId
                 )
             }
         }
@@ -310,28 +376,36 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
         generated: List<Assignment>
     ): List<Slot> {
         val templates = state.shiftTemplates.associateBy { it.id }
+        val location = state.activeLocation()
         val slots = mutableListOf<Slot>()
         var nextId = 0
 
         for (day in 1..ym.lengthOfMonth()) {
             val date = ym.atDay(day)
+            val openingMode = effectiveOpeningMode(state, date)
+            if (openingMode == null || openingMode == OpeningMode.CLOSED) continue
             val required = linkedMapOf<ShiftKind, Int>()
 
-            if (state.settings.requireSetupDaily) {
+            if (location.requireSetupDaily) {
                 required[ShiftKind.SETUP] = 1
             }
             if (
-                state.settings.requireMiddleOnBusyDays &&
-                date.dayOfWeek.value in state.settings.busyWeekdays
+                location.requireMiddleOnBusyDays &&
+                date.dayOfWeek.value in location.busyWeekdays
             ) {
                 required[ShiftKind.MIDDLE] = 1
             }
-            if (state.settings.requireCloseDaily) {
-                required[ShiftKind.CLOSE] = 1
+            if (location.requireCloseDaily) {
+                val closingKind = if (openingMode == OpeningMode.OPEN_24_HOURS) {
+                    ShiftKind.NIGHT
+                } else {
+                    ShiftKind.CLOSE
+                }
+                required[closingKind] = 1
                 if (date == ym.atEndOfMonth()) {
-                    required[ShiftKind.CLOSE] = maxOf(
-                        required[ShiftKind.CLOSE] ?: 0,
-                        state.settings.monthEndCloseManagers.coerceAtLeast(1)
+                    required[closingKind] = maxOf(
+                        required[closingKind] ?: 0,
+                        location.monthEndCloseManagers.coerceAtLeast(1)
                     )
                 }
             }
@@ -346,7 +420,7 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
                         id = nextId++,
                         date = date,
                         kind = kind,
-                        label = if (kind == ShiftKind.CLOSE && count > 1) {
+                        label = if (kind in setOf(ShiftKind.CLOSE, ShiftKind.NIGHT) && count > 1) {
                             "${kindLabel(kind)} ${index + already + 1}/$count"
                         } else {
                             kindLabel(kind)
@@ -407,6 +481,105 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
         }
     }
 
+    private fun fillTimeCoverage(
+        state: AppState,
+        ym: YearMonth,
+        employees: List<Employee>,
+        history: List<Assignment>,
+        generated: MutableList<Assignment>,
+        protectedOff: Map<String, Set<LocalDate>>,
+        unfilled: MutableList<String>,
+        random: Random
+    ) {
+        val points = coveragePoints(state, ym)
+        if (points.isEmpty()) return
+        val pointsByDate = points.groupBy { it.businessDate }
+        val templates = state.shiftTemplates.associateBy { it.id }
+        val reported = mutableSetOf<String>()
+
+        fun countAt(point: CoveragePoint): Int = (generated + history).count { assignment ->
+            if (assignment.locationId != state.activeLocationId) return@count false
+            val template = templates[assignment.shiftTemplateId] ?: return@count false
+            val assignmentDate = runCatching { LocalDate.parse(assignment.date) }.getOrNull()
+                ?: return@count false
+            shiftCoversInstant(assignmentDate, template, point.instant)
+        }
+
+        points.forEach { point ->
+            var safety = 0
+            while (countAt(point) < point.minimumManagers && safety++ < 12) {
+                val choices = employees.flatMap { employee ->
+                    genericTemplates(employee, point.businessDate, state).mapNotNull { template ->
+                        if (!shiftCoversInstant(point.businessDate, template, point.instant)) {
+                            null
+                        } else if (!canAssign(
+                                employee,
+                                point.businessDate,
+                                template,
+                                generated,
+                                history,
+                                state
+                            )
+                        ) {
+                            null
+                        } else {
+                            val coverageGain = pointsByDate[point.businessDate].orEmpty().count { other ->
+                                shiftCoversInstant(point.businessDate, template, other.instant)
+                            }
+                            Choice(
+                                employee = employee,
+                                date = point.businessDate,
+                                template = template,
+                                cost = assignmentCost(
+                                    employee = employee,
+                                    date = point.businessDate,
+                                    template = template,
+                                    assignments = generated + history,
+                                    state = state,
+                                    protectedOff = protectedOff,
+                                    random = random
+                                ) - coverageGain * 10_000.0
+                            )
+                        }
+                    }
+                }
+
+                if (choices.isEmpty()) {
+                    val key = "${point.businessDate}|${point.labels.sorted()}"
+                    if (reported.add(key)) {
+                        val time = point.instant.toLocalTime().toString()
+                        val whenLabel = if (point.instant.toLocalDate() == point.businessDate) {
+                            time
+                        } else {
+                            "volgende dag $time"
+                        }
+                        unfilled += "${point.businessDate} $whenLabel (${point.labels.joinToString()}): " +
+                            "bezetting ${countAt(point)}/${point.minimumManagers}; geen passende managerdienst beschikbaar."
+                    }
+                    break
+                }
+
+                val chosen = choices.minBy { it.cost }
+                generated += Assignment(
+                    employeeId = chosen.employee.id,
+                    date = chosen.date.toString(),
+                    shiftTemplateId = chosen.template.id,
+                    source = "solver-coverage",
+                    locationId = state.activeLocationId
+                )
+            }
+        }
+    }
+
+    private fun shiftCoversInstant(
+        date: LocalDate,
+        template: ShiftTemplate,
+        instant: java.time.LocalDateTime
+    ): Boolean {
+        val (start, end) = shiftBounds(date, template)
+        return !instant.isBefore(start) && instant.isBefore(end)
+    }
+
     private fun fillContractTargets(
         state: AppState,
         ym: YearMonth,
@@ -422,7 +595,7 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
         weeksTouchingMonth(ym).forEach { monday ->
             val ordered = regularEmployees.shuffled(random).sortedByDescending { employee ->
                 targetDaysInMonthWeek(employee, monday, ym, state, history) -
-                    currentDaysInMonthWeek(employee, monday, ym, generated)
+                    currentDaysInMonthWeek(employee, monday, ym, generated + history)
             }
 
             ordered.forEach { employee ->
@@ -430,7 +603,7 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
                 var safety = 0
 
                 while (
-                    currentDaysInMonthWeek(employee, monday, ym, generated) < target &&
+                    currentDaysInMonthWeek(employee, monday, ym, generated + history) < target &&
                     safety++ < 10
                 ) {
                     val weekDates = (0L..6L)
@@ -475,7 +648,8 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
                         employeeId = employee.id,
                         date = chosen.date.toString(),
                         shiftTemplateId = chosen.template.id,
-                        source = "solver-contract"
+                        source = "solver-contract",
+                        locationId = state.activeLocationId
                     )
                 }
             }
@@ -495,7 +669,9 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
         for (day in 1..ym.lengthOfMonth()) {
             val date = ym.atDay(day)
             val minimum = state.dayDemands
-                .lastOrNull { it.date == date.toString() }
+                .lastOrNull {
+                    it.locationId == state.activeLocationId && it.date == date.toString()
+                }
                 ?.minimumManagers
                 ?.coerceAtLeast(0)
                 ?: 0
@@ -534,7 +710,8 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
                     employeeId = chosen.employee.id,
                     date = date.toString(),
                     shiftTemplateId = chosen.template.id,
-                    source = "solver-demand"
+                    source = "solver-demand",
+                    locationId = state.activeLocationId
                 )
             }
         }
@@ -607,7 +784,8 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
                     employeeId = chosen.employee.id,
                     date = date.toString(),
                     shiftTemplateId = chosen.template.id,
-                    source = "solver-trainee-support"
+                    source = "solver-trainee-support",
+                    locationId = state.activeLocationId
                 )
             }
         }
@@ -744,7 +922,7 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
                 templates[assignment.shiftTemplateId]?.kind == template.kind
         }
         val duplicateOperationalPenalty =
-            if (sameKindAlreadyOnDay && template.kind in setOf(ShiftKind.SETUP, ShiftKind.MIDDLE, ShiftKind.CLOSE)) {
+            if (sameKindAlreadyOnDay && template.kind in setOf(ShiftKind.SETUP, ShiftKind.MIDDLE, ShiftKind.CLOSE, ShiftKind.NIGHT)) {
                 3200.0
             } else {
                 0.0
@@ -848,7 +1026,10 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
         }
         if (borrowed.isNotEmpty()) {
             warnings += "Leenmanager: ${borrowed.size} dienst(en) op ${borrowed.map { it.date }.distinct().sorted().joinToString()}."
-        } else if (state.employees.any { it.active && it.role == EmployeeRole.BORROWED }) {
+        } else if (state.employees.any {
+                it.active && it.role == EmployeeRole.BORROWED && it.worksAt(state.activeLocationId)
+            }
+        ) {
             warnings += "Dit rooster lukt zonder leenmanager."
         }
 
@@ -864,7 +1045,7 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
         weeksTouchingMonth(ym).forEach { monday ->
             employees.filter { it.role != EmployeeRole.BORROWED }.forEach { employee ->
                 val target = targetDaysInMonthWeek(employee, monday, ym, state, history)
-                val actual = currentDaysInMonthWeek(employee, monday, ym, assignments)
+                val actual = currentDaysInMonthWeek(employee, monday, ym, assignments + history)
                 if (actual < target) {
                     warnings += "${employee.name}: week ${weekNumber(monday)} heeft $actual/$target geplande contractdagen binnen deze maand."
                 }
@@ -874,7 +1055,10 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
         for (day in 1..ym.lengthOfMonth()) {
             val date = ym.atDay(day)
             state.responsibilities.filter {
-                it.active && it.preferScheduled && responsibilityApplies(it, date, ym)
+                it.active &&
+                    it.locationId == state.activeLocationId &&
+                    it.preferScheduled &&
+                    responsibilityApplies(it, date, ym)
             }.forEach { rule ->
                 val employee = employeeById[rule.employeeId]
                 if (employee != null && assignments.none {
@@ -945,7 +1129,7 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
         weeksTouchingMonth(ym).forEach { monday ->
             employees.filter { it.role != EmployeeRole.BORROWED }.forEach { employee ->
                 val targetDays = targetDaysInMonthWeek(employee, monday, ym, state, history)
-                val actualDays = currentDaysInMonthWeek(employee, monday, ym, assignments)
+                val actualDays = currentDaysInMonthWeek(employee, monday, ym, assignments + history)
                 contractDeficit += (targetDays - actualDays).coerceAtLeast(0)
                 contractOver += (actualDays - targetDays).coerceAtLeast(0)
 
@@ -955,7 +1139,7 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
                     employee.contractedHoursPerWeek *
                         (targetDays.toDouble() / employee.contractedDaysPerWeek.toDouble())
                 }
-                val actualHours = assignments.filter { assignment ->
+                val actualHours = (assignments + history).distinctBy { it.id }.filter { assignment ->
                     assignment.employeeId == employee.id &&
                         runCatching {
                             val d = LocalDate.parse(assignment.date)
@@ -974,6 +1158,7 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
             val date = ym.atDay(day)
             state.responsibilities.count { rule ->
                 rule.active &&
+                    rule.locationId == state.activeLocationId &&
                     rule.preferScheduled &&
                     responsibilityApplies(rule, date, ym) &&
                     assignments.none {
@@ -1041,6 +1226,7 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
         }
 
         return variance(counts(ShiftKind.CLOSE)) * 3.0 +
+            variance(counts(ShiftKind.NIGHT)) * 3.5 +
             variance(counts(ShiftKind.SETUP)) * 1.5 +
             variance(counts(ShiftKind.MIDDLE)) * 2.0 +
             variance(weekends) * 2.5
@@ -1088,6 +1274,7 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
             date.dayOfWeek == DayOfWeek.WEDNESDAY ||
                 date.dayOfWeek == DayOfWeek.FRIDAY
         val haviAvailable = state.shiftTemplates.any {
+            it.locationId == state.activeLocationId &&
             it.kind == ShiftKind.SETUP &&
                 it.name.contains("HAVI", ignoreCase = true) &&
                 date.dayOfWeek.value in it.enabledWeekdays
@@ -1108,7 +1295,9 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
     ): List<ShiftTemplate> {
         return state.shiftTemplates
             .filter {
-                it.kind == kind && date.dayOfWeek.value in it.enabledWeekdays
+                it.locationId == state.activeLocationId &&
+                    it.kind == kind &&
+                    date.dayOfWeek.value in it.enabledWeekdays
             }
             .sortedWith(
                 compareBy<ShiftTemplate> {
@@ -1145,7 +1334,8 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
             ShiftKind.DAY,
             ShiftKind.MIDDLE,
             ShiftKind.SETUP,
-            ShiftKind.CLOSE
+            ShiftKind.CLOSE,
+            ShiftKind.NIGHT
         )
         val taskKinds = responsibilitiesFor(employee.id, date, state)
             .flatMap { preferredKindsForTask(it.type) }
@@ -1161,7 +1351,8 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
                     ShiftKind.DAY,
                     ShiftKind.MIDDLE,
                     ShiftKind.SETUP,
-                    ShiftKind.CLOSE
+                    ShiftKind.CLOSE,
+                    ShiftKind.NIGHT
                 )
             ).distinct()
 
@@ -1185,6 +1376,15 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
         state: AppState
     ): Boolean {
         if (!employee.active) return false
+        if (!employee.worksAt(state.activeLocationId)) return false
+        if (template.locationId != state.activeLocationId) return false
+        if (openingBounds(state, date) == null) return false
+        if (state.manualDaysOff.any {
+                it.employeeId == employee.id &&
+                    it.date == date.toString() &&
+                    it.locationId == state.activeLocationId
+            }
+        ) return false
         if (approvedAbsence(state, employee.id, date)) return false
         if (!employee.canWork(template.kind)) return false
         if (generated.any {
@@ -1222,7 +1422,8 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
             employeeId = employee.id,
             date = date.toString(),
             shiftTemplateId = template.id,
-            source = "solver-candidate"
+            source = "solver-candidate",
+            locationId = state.activeLocationId
         )
         val baseline = state.copy(
             assignments = generated,
@@ -1401,6 +1602,7 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
         val ym = YearMonth.from(date)
         return state.responsibilities.filter {
             it.active &&
+                it.locationId == state.activeLocationId &&
                 it.preferScheduled &&
                 it.employeeId == employeeId &&
                 responsibilityApplies(it, date, ym)
@@ -1571,11 +1773,12 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
     private fun slotPriority(kind: ShiftKind): Int =
         when (kind) {
             ShiftKind.CLOSE -> 0
-            ShiftKind.MIDDLE -> 1
-            ShiftKind.SETUP -> 2
-            ShiftKind.KPI -> 3
-            ShiftKind.DAY -> 4
-            ShiftKind.CUSTOM -> 5
+            ShiftKind.NIGHT -> 1
+            ShiftKind.MIDDLE -> 2
+            ShiftKind.SETUP -> 3
+            ShiftKind.KPI -> 4
+            ShiftKind.DAY -> 5
+            ShiftKind.CUSTOM -> 6
         }
 
     private fun kindLabel(kind: ShiftKind): String =
@@ -1584,6 +1787,7 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
             ShiftKind.DAY -> "Dag"
             ShiftKind.MIDDLE -> "Tussen"
             ShiftKind.CLOSE -> "Sluit"
+            ShiftKind.NIGHT -> "Nacht"
             ShiftKind.KPI -> "KPI"
             ShiftKind.CUSTOM -> "Dienst"
         }

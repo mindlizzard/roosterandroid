@@ -2,7 +2,7 @@ name: Build Android APK
 
 on:
   push:
-    branches: ["main", "feature/initial-rooster-app"]
+    branches: ["main", "feature/**"]
   pull_request:
     branches: ["main"]
   workflow_dispatch:
@@ -38,6 +38,9 @@ jobs:
 
       - name: Unit tests
         run: gradle :app:testDebugUnitTest --stacktrace
+
+      - name: Android Lint
+        run: gradle :app:lintDebug --stacktrace
 
       - name: Build debug APK
         run: gradle :app:assembleDebug --stacktrace
