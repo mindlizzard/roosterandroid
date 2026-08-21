@@ -131,6 +131,32 @@ data class DayDemand(
 )
 
 @Serializable
+data class DayPartDemand(
+    val id: String = UUID.randomUUID().toString(),
+    val date: String,
+    val label: String,
+    val start: String,
+    val end: String,
+    val minimumManagers: Int = 1,
+    val guestCount: Int? = null,
+    val note: String = ""
+) {
+    fun startTime(): LocalTime = LocalTime.parse(start)
+    fun endTime(): LocalTime = LocalTime.parse(end)
+}
+
+@Serializable
+data class OperatingHours(
+    val weekday: Int,
+    val open: String,
+    val close: String,
+    val closed: Boolean = false
+) {
+    fun openTime(): LocalTime = LocalTime.parse(open)
+    fun closeTime(): LocalTime = LocalTime.parse(close)
+}
+
+@Serializable
 data class ShiftSwapRecord(
     val id: String = UUID.randomUUID().toString(),
     val firstAssignmentId: String,
@@ -179,7 +205,9 @@ data class PlannerSettings(
     val weekCountWeekday: Int = 1,
     val showMonthCountOnLastDay: Boolean = true,
     val monthEndCloseManagers: Int = 2,
-    val warnMinimumFreeSundays: Boolean = true
+    val warnMinimumFreeSundays: Boolean = true,
+    val autoFixAfterManualChanges: Boolean = false,
+    val protectManualAssignmentsDuringAutoFix: Boolean = true
 )
 
 @Serializable
@@ -194,6 +222,8 @@ data class AppState(
     val responsibilities: List<ResponsibilityRule> = emptyList(),
     val personMarkers: List<PersonDayMarker> = emptyList(),
     val dayDemands: List<DayDemand> = emptyList(),
+    val dayPartDemands: List<DayPartDemand> = emptyList(),
+    val operatingHours: List<OperatingHours> = defaultOperatingHours(),
     val swapHistory: List<ShiftSwapRecord> = emptyList(),
     val dayNotes: List<DayNote> = emptyList(),
     val assignments: List<Assignment> = emptyList(),
@@ -210,6 +240,36 @@ fun defaultShiftTemplates(): List<ShiftTemplate> = listOf(
     ShiftTemplate(name = "Sluit vr-za", kind = ShiftKind.CLOSE, start = "17:00", end = "01:00", enabledWeekdays = setOf(5, 6)),
     ShiftTemplate(name = "KPI", kind = ShiftKind.KPI, start = "09:00", end = "17:00")
 )
+
+fun defaultOperatingHours(): List<OperatingHours> = (1..7).map { weekday ->
+    OperatingHours(
+        weekday = weekday,
+        open = "08:00",
+        close = if (weekday in setOf(5, 6)) "01:00" else "00:00"
+    )
+}
+
+fun AppState.operatingHoursOn(date: LocalDate): OperatingHours? =
+    operatingHours.lastOrNull { it.weekday == date.dayOfWeek.value }
+
+fun AppState.isOpenOn(date: LocalDate): Boolean =
+    operatingHoursOn(date)?.closed != true
+
+fun AppState.allowsShiftOn(date: LocalDate, template: ShiftTemplate): Boolean {
+    val hours = operatingHoursOn(date) ?: return true
+    if (hours.closed) return false
+
+    val anchor = LocalDate.of(2000, 1, 3)
+    val opensAt = anchor.atTime(hours.openTime())
+    var closesAt = anchor.atTime(hours.closeTime())
+    if (!closesAt.isAfter(opensAt)) closesAt = closesAt.plusDays(1)
+
+    val startsAt = anchor.atTime(template.startTime())
+    var endsAt = anchor.atTime(template.endTime())
+    if (!endsAt.isAfter(startsAt)) endsAt = endsAt.plusDays(1)
+
+    return !startsAt.isBefore(opensAt) && !endsAt.isAfter(closesAt)
+}
 
 fun Employee.canWork(kind: ShiftKind): Boolean = when (kind) {
     ShiftKind.SETUP -> canSetup

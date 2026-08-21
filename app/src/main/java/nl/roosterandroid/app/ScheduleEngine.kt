@@ -203,6 +203,17 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
             random = random
         )
 
+        fillDayPartManagerDemand(
+            state = state,
+            ym = ym,
+            employees = employees,
+            history = history,
+            generated = generated,
+            protectedOff = protectedOff,
+            unfilled = unfilled,
+            random = random
+        )
+
         ensureTraineeCoverage(
             state = state,
             ym = ym,
@@ -315,6 +326,7 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
 
         for (day in 1..ym.lengthOfMonth()) {
             val date = ym.atDay(day)
+            if (!state.isOpenOn(date)) continue
             val required = linkedMapOf<ShiftKind, Int>()
 
             if (state.settings.requireSetupDaily) {
@@ -538,6 +550,89 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
                 )
             }
         }
+    }
+
+    private fun fillDayPartManagerDemand(
+        state: AppState,
+        ym: YearMonth,
+        employees: List<Employee>,
+        history: List<Assignment>,
+        generated: MutableList<Assignment>,
+        protectedOff: Map<String, Set<LocalDate>>,
+        unfilled: MutableList<String>,
+        random: Random
+    ) {
+        val templates = state.shiftTemplates.associateBy { it.id }
+        val demands = state.dayPartDemands
+            .mapNotNull { demand ->
+                val date = runCatching { LocalDate.parse(demand.date) }.getOrNull()
+                if (date == null || YearMonth.from(date) != ym) null else date to demand
+            }
+            .sortedWith(compareBy({ it.first }, { it.second.start }))
+
+        demands.forEach { (date, demand) ->
+            val required = demand.minimumManagers.coerceAtLeast(0)
+            var safety = 0
+
+            fun coveringCount(): Int = generated.count { assignment ->
+                if (assignment.date != date.toString()) return@count false
+                val template = templates[assignment.shiftTemplateId] ?: return@count false
+                templateCoversDayPart(date, template, demand)
+            }
+
+            while (coveringCount() < required && safety++ < employees.size + 2) {
+                val choices = employees.flatMap { employee ->
+                    genericTemplates(employee, date, state)
+                        .filter { templateCoversDayPart(date, it, demand) }
+                        .mapNotNull { template ->
+                            if (!canAssign(employee, date, template, generated, history, state)) {
+                                null
+                            } else {
+                                Choice(
+                                    employee = employee,
+                                    date = date,
+                                    template = template,
+                                    cost = assignmentCost(
+                                        employee = employee,
+                                        date = date,
+                                        template = template,
+                                        assignments = generated + history,
+                                        state = state,
+                                        protectedOff = protectedOff,
+                                        random = random
+                                    )
+                                )
+                            }
+                        }
+                }
+
+                if (choices.isEmpty()) {
+                    unfilled += "$date ${demand.label} ${demand.start}-${demand.end}: " +
+                        "minimumbezetting $required managers niet haalbaar."
+                    return@forEach
+                }
+
+                val chosen = choices.minBy { it.cost }
+                generated += Assignment(
+                    employeeId = chosen.employee.id,
+                    date = date.toString(),
+                    shiftTemplateId = chosen.template.id,
+                    source = "solver-daypart"
+                )
+            }
+        }
+    }
+
+    private fun templateCoversDayPart(
+        date: LocalDate,
+        template: ShiftTemplate,
+        demand: DayPartDemand
+    ): Boolean {
+        val (shiftStart, shiftEnd) = shiftBounds(date, template)
+        val demandStart = date.atTime(demand.startTime())
+        var demandEnd = date.atTime(demand.endTime())
+        if (!demandEnd.isAfter(demandStart)) demandEnd = demandEnd.plusDays(1)
+        return !shiftStart.isAfter(demandStart) && !shiftEnd.isBefore(demandEnd)
     }
 
     private fun ensureTraineeCoverage(
@@ -1108,7 +1203,9 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
     ): List<ShiftTemplate> {
         return state.shiftTemplates
             .filter {
-                it.kind == kind && date.dayOfWeek.value in it.enabledWeekdays
+                it.kind == kind &&
+                    date.dayOfWeek.value in it.enabledWeekdays &&
+                    state.allowsShiftOn(date, it)
             }
             .sortedWith(
                 compareBy<ShiftTemplate> {
@@ -1185,6 +1282,7 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
         state: AppState
     ): Boolean {
         if (!employee.active) return false
+        if (!state.allowsShiftOn(date, template)) return false
         if (approvedAbsence(state, employee.id, date)) return false
         if (!employee.canWork(template.kind)) return false
         if (generated.any {

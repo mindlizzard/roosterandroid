@@ -244,6 +244,104 @@ class SolverScheduleEngineTest {
     }
 
     @Test
+    fun dayPartDemandAddsManagersWhoseShiftCoversTheWindow() {
+        val employees = (1..4).map {
+            Employee(
+                name = "M$it",
+                contractedDaysPerWeek = 0,
+                contractedHoursPerWeek = 0.0,
+                maxShiftsPerWeek = 7
+            )
+        }
+        val state = AppState(
+            year = 2026,
+            month = 8,
+            employees = employees,
+            dayPartDemands = listOf(
+                DayPartDemand(
+                    date = "2026-08-03",
+                    label = "Lunch",
+                    start = "11:00",
+                    end = "14:00",
+                    minimumManagers = 3
+                )
+            ),
+            settings = leanSettings().copy(
+                requireSetupDaily = false,
+                requireCloseDaily = false
+            )
+        )
+
+        val result = ScheduleEngine().generate(state)
+        val templates = state.shiftTemplates.associateBy { it.id }
+        val onDate = result.assignments.filter { it.date == "2026-08-03" }
+
+        assertEquals(3, onDate.size)
+        assertTrue(onDate.all { assignment ->
+            val template = templates.getValue(assignment.shiftTemplateId)
+            !template.startTime().isAfter(java.time.LocalTime.of(11, 0)) &&
+                !template.endTime().isBefore(java.time.LocalTime.of(14, 0))
+        })
+    }
+
+    @Test
+    fun closedWeekdayNeverReceivesAutomaticAssignments() {
+        val employees = (1..4).map {
+            Employee(
+                name = "M$it",
+                contractedDaysPerWeek = 5,
+                contractedHoursPerWeek = 40.0,
+                maxShiftsPerWeek = 7
+            )
+        }
+        val state = AppState(
+            year = 2026,
+            month = 8,
+            employees = employees,
+            operatingHours = defaultOperatingHours().map {
+                if (it.weekday == 1) it.copy(closed = true) else it
+            },
+            settings = leanSettings()
+        )
+
+        val result = ScheduleEngine().generate(state)
+
+        assertFalse(result.assignments.any {
+            java.time.LocalDate.parse(it.date).dayOfWeek.value == 1
+        })
+    }
+
+    @Test
+    fun shiftOutsideRestaurantHoursIsNotPlanned() {
+        val employee = Employee(
+            name = "A",
+            contractedDaysPerWeek = 5,
+            contractedHoursPerWeek = 40.0,
+            maxShiftsPerWeek = 7
+        )
+        val early = ShiftTemplate(
+            name = "Te vroeg",
+            kind = ShiftKind.DAY,
+            start = "07:00",
+            end = "15:00"
+        )
+        val state = AppState(
+            year = 2026,
+            month = 8,
+            employees = listOf(employee),
+            shiftTemplates = listOf(early),
+            settings = leanSettings().copy(
+                requireSetupDaily = false,
+                requireCloseDaily = false
+            )
+        )
+
+        val result = ScheduleEngine().generate(state)
+
+        assertTrue(result.assignments.isEmpty())
+    }
+
+    @Test
     fun kpiTaskIsOverlayOnNormalOperationalShift() {
         val jan = Employee(
             name = "Jan",
