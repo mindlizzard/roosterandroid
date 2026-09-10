@@ -86,7 +86,23 @@ internal class SchedulePanel(private val controller: DesktopController) : JPanel
         add(scroll, BorderLayout.CENTER)
         add(hint.apply { border = EmptyBorder(8, 4, 0, 4) }, BorderLayout.SOUTH)
         refresh()
-    }
+    
+        // v0.11.1: beschikbaarheid is alleen een venster; de echte dienst blijft apart wijzigbaar.
+        run {
+            val border = layout as? java.awt.BorderLayout
+            val previousNorth = border?.getLayoutComponent(java.awt.BorderLayout.NORTH) as? java.awt.Component
+            if (previousNorth != null) remove(previousNorth)
+            val wrapper = JPanel(java.awt.BorderLayout()).apply {
+                if (previousNorth != null) add(previousNorth, java.awt.BorderLayout.CENTER)
+                add(JPanel(FlowLayout(FlowLayout.LEFT, 8, 4)).apply {
+                    add(secondaryButton("Dienst aanpassen") {
+                        ManualScheduleEditor.open(this@SchedulePanel, controller)
+                    })
+                }, java.awt.BorderLayout.SOUTH)
+            }
+            add(wrapper, java.awt.BorderLayout.NORTH)
+        }
+}
 
     override fun refresh() {
         model.refresh()

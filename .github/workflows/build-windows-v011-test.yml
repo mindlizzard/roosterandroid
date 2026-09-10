@@ -1,10 +1,12 @@
-name: Build Windows v0.11.1 DEBUG
+name: Build Windows v0.11.1 STABILITY
 
 on:
   push:
     branches: ["feature/windows-v0.10"]
     paths:
-      - ".v011/**"
+      - "app/src/main/java/nl/roosterandroid/app/**"
+      - "desktopApp/**"
+      - ".v011/verify_v0111.py"
       - ".github/workflows/build-windows-v011-test.yml"
   workflow_dispatch:
 
@@ -17,16 +19,9 @@ jobs:
     timeout-minutes: 35
 
     steps:
-      - name: Checkout v0.10 source
+      - name: Checkout v0.11.1 source
         uses: actions/checkout@v5
 
-      - name: Apply v0.11 integration
-        shell: pwsh
-        run: python -X utf8 .v011/apply_v011_changes.py .
-
-      - name: Apply v0.11.1 bugfixes
-        shell: pwsh
-        run: python -X utf8 .v011/apply_v0111_hotfix.py .
 
       - name: Static debug verification
         shell: pwsh

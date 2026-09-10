@@ -42,7 +42,8 @@ internal class TeamPanel(private val controller: DesktopController) : JPanel(Bor
         employeeTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION)
         employeeTable.selectionModel.addListSelectionListener {
             if (!it.valueIsAdjusting && !refreshing) {
-                selectedEmployeeId = selectedEmployee()?.id
+                val row = selectedModelRow(employeeTable)
+                selectedEmployeeId = row?.let { controller.state.employees.getOrNull(it)?.id }
                 refreshAvailability()
             }
         }
@@ -116,7 +117,8 @@ internal class TeamPanel(private val controller: DesktopController) : JPanel(Bor
         val index = controller.state.employees.indexOfFirst { it.id == previous }
             .takeIf { it >= 0 } ?: controller.state.employees.indices.firstOrNull() ?: -1
         if (index >= 0) {
-            employeeTable.setRowSelectionInterval(index, index)
+            val viewIndex = employeeTable.convertRowIndexToView(index)
+            if (viewIndex >= 0) employeeTable.setRowSelectionInterval(viewIndex, viewIndex)
             selectedEmployeeId = controller.state.employees[index].id
         } else selectedEmployeeId = null
         refreshing = false
@@ -205,10 +207,10 @@ internal class TeamPanel(private val controller: DesktopController) : JPanel(Bor
     }
 
     private fun selectedEmployee(): Employee? {
-        val id = selectedEmployeeId
-        if (id != null) controller.state.employees.firstOrNull { it.id == id }?.let { return it }
-        val row = selectedModelRow(employeeTable) ?: return null
-        return controller.state.employees.getOrNull(row)
+        val row = selectedModelRow(employeeTable)
+        if (row != null) controller.state.employees.getOrNull(row)?.let { return it }
+        val id = selectedEmployeeId ?: return null
+        return controller.state.employees.firstOrNull { it.id == id }
     }
 
     private fun yesNo(value: Boolean): String = if (value) "Ja" else "Nee"

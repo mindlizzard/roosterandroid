@@ -99,7 +99,7 @@ fun AdminScreen(controller: AppController) {
             }
         }
 
-        item { AdminSectionTitle("Uren per manager") }
+        item { AdminSectionTitle("Uren per medewerker") }
         items(stats) { stat ->
             AdminBar(
                 label = stat.name,

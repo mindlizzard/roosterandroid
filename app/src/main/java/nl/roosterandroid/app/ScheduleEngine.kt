@@ -227,10 +227,7 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
 
         val warnings = buildWarnings(state, ym, employees, history, generated)
         val score = evaluate(state, ym, employees, history, generated, unfilled)
-        val finalState = state.copy(assignments = generated, assignmentHistory = history)
-        val atwErrors = atw.validate(finalState).count {
-            it.severity == AtwValidator.Severity.ERROR
-        }
+        val atwErrors = introducedAtwErrors(state, generated, history).size
         val hardUnfilled = unfilled.count {
             !it.contains("contractdagen", ignoreCase = true)
         }
@@ -321,15 +318,17 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
         generated: List<Assignment>
     ): List<Slot> {
         val templates = state.shiftTemplates.associateBy { it.id }
+        val employeeById = state.employees.associateBy { it.id }
         val slots = mutableListOf<Slot>()
         var nextId = 0
 
         for (day in 1..ym.lengthOfMonth()) {
             val date = ym.atDay(day)
             if (!state.isOpenOn(date)) continue
+            val twentyFourHours = state.operatingHoursOn(date)?.isTwentyFourHours() == true
             val required = linkedMapOf<ShiftKind, Int>()
 
-            if (state.settings.requireSetupDaily) {
+            if (state.settings.requireSetupDaily && !twentyFourHours) {
                 required[ShiftKind.SETUP] = 1
             }
             if (
@@ -338,7 +337,7 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
             ) {
                 required[ShiftKind.MIDDLE] = 1
             }
-            if (state.settings.requireCloseDaily) {
+            if (state.settings.requireCloseDaily && !twentyFourHours) {
                 required[ShiftKind.CLOSE] = 1
                 if (date == ym.atEndOfMonth()) {
                     required[ShiftKind.CLOSE] = maxOf(
@@ -351,6 +350,7 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
             required.forEach { (kind, count) ->
                 val already = generated.count { assignment ->
                     assignment.date == date.toString() &&
+                        employeeById[assignment.employeeId]?.countsAsManager() == true &&
                         templates[assignment.shiftTemplateId]?.kind == kind
                 }
                 repeat((count - already).coerceAtLeast(0)) { index ->
@@ -376,7 +376,7 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
         employees: List<Employee>,
         state: AppState
     ): Int {
-        return employees.count { employee ->
+        return employees.filter { it.countsAsManager() }.count { employee ->
             templatesForKind(slot.date, slot.kind, state).any { template ->
                 employee.canWork(template.kind) &&
                     isAvailable(employee, slot.date, template, state) &&
@@ -395,7 +395,7 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
         random: Random
     ): List<Choice> {
         val templates = templatesForKind(slot.date, slot.kind, state)
-        return employees.flatMap { employee ->
+        return employees.filter { it.countsAsManager() }.flatMap { employee ->
             templates.mapNotNull { template ->
                 if (!canAssign(employee, slot.date, template, generated, history, state)) {
                     null
@@ -504,6 +504,7 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
         unfilled: MutableList<String>,
         random: Random
     ) {
+        val employeeById = state.employees.associateBy { it.id }
         for (day in 1..ym.lengthOfMonth()) {
             val date = ym.atDay(day)
             val minimum = state.dayDemands
@@ -512,8 +513,13 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
                 ?.coerceAtLeast(0)
                 ?: 0
 
-            while (generated.count { it.date == date.toString() } < minimum) {
-                val choices = employees.flatMap { employee ->
+            fun managerCount(): Int = generated.count { assignment ->
+                assignment.date == date.toString() &&
+                    employeeById[assignment.employeeId]?.countsAsManager() == true
+            }
+
+            while (managerCount() < minimum) {
+                val choices = employees.filter { it.countsAsManager() }.flatMap { employee ->
                     genericTemplates(employee, date, state).mapNotNull { template ->
                         if (!canAssign(employee, date, template, generated, history, state)) {
                             null
@@ -563,6 +569,7 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
         random: Random
     ) {
         val templates = state.shiftTemplates.associateBy { it.id }
+        val employeeById = state.employees.associateBy { it.id }
         val demands = state.dayPartDemands
             .mapNotNull { demand ->
                 val date = runCatching { LocalDate.parse(demand.date) }.getOrNull()
@@ -576,12 +583,13 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
 
             fun coveringCount(): Int = generated.count { assignment ->
                 if (assignment.date != date.toString()) return@count false
+                if (employeeById[assignment.employeeId]?.countsAsManager() != true) return@count false
                 val template = templates[assignment.shiftTemplateId] ?: return@count false
                 templateCoversDayPart(date, template, demand)
             }
 
             while (coveringCount() < required && safety++ < employees.size + 2) {
-                val choices = employees.flatMap { employee ->
+                val choices = employees.filter { it.countsAsManager() }.flatMap { employee ->
                     genericTemplates(employee, date, state)
                         .filter { templateCoversDayPart(date, it, demand) }
                         .mapNotNull { template ->
@@ -667,7 +675,7 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
                 ?: return@forEach
 
             val choices = employees
-                .filter { it.role != EmployeeRole.TRAINEE }
+                .filter { it.isExperiencedManager() }
                 .flatMap { employee ->
                     genericTemplates(employee, date, state).mapNotNull { template ->
                         if (!templateCovers(date, template, traineeTemplate)) {
@@ -993,9 +1001,7 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
             }
         }
 
-        val finalState = state.copy(assignments = assignments, assignmentHistory = history)
-        atw.validate(finalState)
-            .filter { it.severity == AtwValidator.Severity.ERROR }
+        introducedAtwErrors(state, assignments, history)
             .take(20)
             .forEach { violation ->
                 warnings += "ATW ${violation.date ?: ""}: ${violation.message}"
@@ -1018,6 +1024,26 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
         }
     }
 
+    private fun introducedAtwErrors(
+        state: AppState,
+        assignments: List<Assignment>,
+        history: List<Assignment>
+    ): List<AtwValidator.Violation> {
+        fun key(v: AtwValidator.Violation): String =
+            "${v.employeeId}|${v.date}|${v.rule}|${v.message}"
+
+        val baseline = atw.validate(
+            state.copy(assignments = emptyList(), assignmentHistory = history)
+        ).filter { it.severity == AtwValidator.Severity.ERROR }
+            .map(::key)
+            .toSet()
+
+        return atw.validate(
+            state.copy(assignments = assignments, assignmentHistory = history)
+        ).filter { it.severity == AtwValidator.Severity.ERROR }
+            .filter { key(it) !in baseline }
+    }
+
     private fun evaluate(
         state: AppState,
         ym: YearMonth,
@@ -1028,10 +1054,7 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
     ): Double {
         val employeeById = state.employees.associateBy { it.id }
         val templates = state.shiftTemplates.associateBy { it.id }
-        val finalState = state.copy(assignments = assignments, assignmentHistory = history)
-        val atwErrors = atw.validate(finalState).count {
-            it.severity == AtwValidator.Severity.ERROR
-        }
+        val atwErrors = introducedAtwErrors(state, assignments, history).size
 
         var contractDeficit = 0
         var contractOver = 0
@@ -1112,7 +1135,9 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
         employees: List<Employee>,
         assignments: List<Assignment>
     ): Double {
-        val regular = employees.filter { it.role != EmployeeRole.BORROWED }
+        val regular = employees.filter {
+            it.countsAsManager() && it.role != EmployeeRole.BORROWED
+        }
         if (regular.size < 2) return 0.0
         val templates = state.shiftTemplates.associateBy { it.id }
 
@@ -1178,7 +1203,8 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
         date: LocalDate,
         state: AppState
     ): Double {
-        if (template.kind != ShiftKind.SETUP) return 0.0
+        var cost = if (template.autoGenerated) 120.0 else 0.0
+        if (template.kind != ShiftKind.SETUP) return cost
         val isHaviDay =
             date.dayOfWeek == DayOfWeek.WEDNESDAY ||
                 date.dayOfWeek == DayOfWeek.FRIDAY
@@ -1187,13 +1213,14 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
                 it.name.contains("HAVI", ignoreCase = true) &&
                 date.dayOfWeek.value in it.enabledWeekdays
         }
-        if (!haviAvailable) return 0.0
+        if (!haviAvailable) return cost
         val isHaviTemplate = template.name.contains("HAVI", ignoreCase = true)
-        return if (isHaviDay) {
+        cost += if (isHaviDay) {
             if (isHaviTemplate) -400.0 else 400.0
         } else {
             if (isHaviTemplate) 250.0 else 0.0
         }
+        return cost
     }
 
     private fun templatesForKind(
@@ -1201,7 +1228,10 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
         kind: ShiftKind,
         state: AppState
     ): List<ShiftTemplate> {
+        val isTwentyFourHours = state.operatingHoursOn(date)?.isTwentyFourHours() == true
+        if (isTwentyFourHours && kind in setOf(ShiftKind.SETUP, ShiftKind.CLOSE)) return emptyList()
         return state.shiftTemplates
+            .filter { !it.archived }
             .filter {
                 it.kind == kind &&
                     date.dayOfWeek.value in it.enabledWeekdays &&
@@ -1262,9 +1292,19 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
                 )
             ).distinct()
 
-        return orderedKinds.flatMap { kind ->
+        val automaticCustom = if (employee.countsAsManager()) {
+            state.shiftTemplates.filter { template ->
+                !template.archived &&
+                template.autoGenerated &&
+                    template.kind == ShiftKind.CUSTOM &&
+                    date.dayOfWeek.value in template.enabledWeekdays &&
+                    state.allowsShiftOn(date, template)
+            }
+        } else emptyList()
+
+        return (orderedKinds.flatMap { kind ->
             templatesForKind(date, kind, state)
-        }.distinctBy { it.id }
+        } + automaticCustom).distinctBy { it.id }
     }
 
     private fun contractTemplates(
@@ -1566,7 +1606,7 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
         val templates = state.shiftTemplates.associateBy { it.id }
         return assignments.any { assignment ->
             assignment.date == date.toString() &&
-                employeeById[assignment.employeeId]?.role != EmployeeRole.TRAINEE &&
+                employeeById[assignment.employeeId]?.isExperiencedManager() == true &&
                 templates[assignment.shiftTemplateId]?.let {
                     templateCovers(date, it, targetTemplate)
                 } == true

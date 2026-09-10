@@ -18,6 +18,7 @@ import nl.roosterandroid.app.ShiftKind
 import nl.roosterandroid.app.ShiftTemplate
 import nl.roosterandroid.app.WeeklyAvailability
 import nl.roosterandroid.app.canWork
+import nl.roosterandroid.app.countsAsManager
 import java.awt.Component
 import java.awt.GridBagConstraints
 import java.awt.GridBagLayout
@@ -54,6 +55,18 @@ internal object DesktopDialogs {
         val close = JCheckBox("Sluit", existing?.canClose ?: true)
         val kpi = JCheckBox("KPI", existing?.canKpi ?: true)
         val active = JCheckBox("Actief", existing?.active ?: true)
+
+        if (existing == null) {
+            role.addActionListener {
+                val selectedRole = role.selectedItem as EmployeeRole
+                val managerRole = selectedRole.countsAsManager()
+                setup.isSelected = managerRole && selectedRole != EmployeeRole.BORROWED
+                day.isSelected = true
+                middle.isSelected = true
+                close.isSelected = managerRole
+                kpi.isSelected = managerRole
+            }
+        }
 
         val form = formPanel(
             "Naam" to name,
@@ -290,14 +303,19 @@ internal object DesktopDialogs {
     fun operatingHours(parent: Component, existing: OperatingHours): OperatingHours? {
         val open = JTextField(existing.open, 8)
         val close = JTextField(existing.close, 8)
+        val allDay = JCheckBox("24/7 geopend", existing.isTwentyFourHours())
         val closed = JCheckBox("Gesloten", existing.closed)
         val form = formPanel(
             "Weekdag" to JLabel(dayLabels[existing.weekday - 1]),
             "Open / planning start" to open,
             "Dicht / planning einde" to close,
+            "Doorlopend" to allDay,
             "Status" to closed
         )
         if (!confirm(parent, "Restauranttijden", form)) return null
+        if (allDay.isSelected && !closed.isSelected) {
+            return existing.copy(open = "00:00", close = "00:00", closed = false)
+        }
         if (!validTime(open.text) || !validTime(close.text)) {
             error(parent, "Gebruik tijden als UU:mm")
             return null

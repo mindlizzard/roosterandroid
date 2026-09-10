@@ -1,5 +1,6 @@
 package nl.roosterandroid.desktop
 
+import nl.roosterandroid.app.countsAsManager
 import java.awt.BorderLayout
 import java.awt.FlowLayout
 import java.awt.Font
@@ -17,7 +18,7 @@ import javax.swing.border.EmptyBorder
 import javax.swing.table.DefaultTableModel
 
 internal class LocationsPanel(private val controller: DesktopController) : JPanel(BorderLayout()), Refreshable {
-    private val model = object : DefaultTableModel(arrayOf("Vestiging", "Actief", "Managers", "Diensten deze maand", "Restauranttijden"), 0) {
+    private val model = object : DefaultTableModel(arrayOf("Vestiging", "Actief", "Team", "Managers", "Diensten deze maand", "Restauranttijden"), 0) {
         override fun isCellEditable(row: Int, column: Int): Boolean = false
     }
     private val table = configuredTable(model)
@@ -59,17 +60,26 @@ internal class LocationsPanel(private val controller: DesktopController) : JPane
                 location.name,
                 if (location.id == controller.workspace.activeLocationId) "Ja" else "",
                 state.employees.count { it.active },
+                state.employees.count { it.active && it.countsAsManager() },
                 state.assignments.size,
                 timeSummary
             ))
         }
         val activeIndex = controller.workspace.locations.indexOfFirst { it.id == controller.workspace.activeLocationId }
-        if (activeIndex >= 0) table.setRowSelectionInterval(activeIndex, activeIndex)
+        if (activeIndex >= 0) {
+            val viewIndex = table.convertRowIndexToView(activeIndex)
+            if (viewIndex >= 0) table.setRowSelectionInterval(viewIndex, viewIndex)
+        }
     }
 
     private fun addLocation() {
         val name = JTextField("", 22)
-        val copy = JCheckBox("Kopieer team, templates en regels van huidige vestiging", true)
+        val copy = JCheckBox(
+            "Kopieer team, templates en regels van huidige vestiging (losse kopie)",
+            false
+        ).apply {
+            toolTipText = "Standaard uit: iedere vestiging kan zo een volledig eigen managerteam krijgen."
+        }
         val panel = JPanel(GridBagLayout()).apply {
             add(JLabel("Naam"), GridBagConstraints().apply {
                 gridx = 0; gridy = 0; insets = Insets(4, 4, 4, 10); anchor = GridBagConstraints.WEST

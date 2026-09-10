@@ -468,6 +468,7 @@ object RosterPdfExporter {
         EmployeeRole.TRAINEE -> rgb("ffe2c6")
         EmployeeRole.BORROWED -> rgb("fff0b8")
         EmployeeRole.MANAGER -> rgb("dde7f5")
+        EmployeeRole.HOST -> rgb("e0f3e8")
     }
 
     private fun absenceColorPdf(type: AbsenceType): Int = when (type) {
@@ -517,6 +518,7 @@ object RosterPdfExporter {
         EmployeeRole.RM -> "RM"
         EmployeeRole.TRAINEE -> "Trainee"
         EmployeeRole.BORROWED -> "Leen"
+        EmployeeRole.HOST -> "Host"
     }
 
     private fun markerShortPdf(type: PersonMarkerType): String = when (type) {

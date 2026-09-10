@@ -105,13 +105,19 @@ class AppController(private val storage: ScheduleStorage) {
     fun addEmployee(name: String, role: EmployeeRole) {
         val clean = name.trim()
         if (clean.isEmpty()) return
+        val borrowed = role == EmployeeRole.BORROWED
+        val managerRole = role.countsAsManager()
         val employee = Employee(
             name = clean,
             role = role,
-            contractedDaysPerWeek = if (role == EmployeeRole.BORROWED) 3 else 5,
-            contractedHoursPerWeek = if (role == EmployeeRole.BORROWED) 24.0 else 40.0,
-            maxShiftsPerWeek = if (role == EmployeeRole.BORROWED) 3 else 5,
-            canSetup = role != EmployeeRole.BORROWED
+            contractedDaysPerWeek = if (borrowed) 3 else 5,
+            contractedHoursPerWeek = if (borrowed) 24.0 else 40.0,
+            maxShiftsPerWeek = if (borrowed) 3 else 5,
+            canSetup = managerRole && !borrowed,
+            canDay = true,
+            canMiddle = true,
+            canClose = managerRole,
+            canKpi = managerRole
         )
         commit(state.copy(employees = state.employees + employee), "$clean toegevoegd")
     }
@@ -1405,6 +1411,7 @@ private fun managerHeaderColor(role: EmployeeRole): Color = when (role) {
     EmployeeRole.TRAINEE -> MatrixColors.TraineeHeader
     EmployeeRole.BORROWED -> MatrixColors.BorrowedHeader
     EmployeeRole.MANAGER -> MatrixColors.Header
+    EmployeeRole.HOST -> MatrixColors.Header
 }
 
 private fun shiftColor(kind: ShiftKind): Color = when (kind) {
@@ -1741,4 +1748,5 @@ private fun roleLabel(role: EmployeeRole): String = when (role) {
     EmployeeRole.RM -> "Restaurant Manager"
     EmployeeRole.TRAINEE -> "Trainee"
     EmployeeRole.BORROWED -> "Leenmanager"
+    EmployeeRole.HOST -> "Host(ess)"
 }

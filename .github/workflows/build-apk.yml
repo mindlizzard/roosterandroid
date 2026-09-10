@@ -2,7 +2,7 @@ name: Build Android APK
 
 on:
   push:
-    branches: ["main", "feature/initial-rooster-app"]
+    branches: ["main", "feature/initial-rooster-app", "feature/windows-v0.10"]
   pull_request:
     branches: ["main"]
   workflow_dispatch:

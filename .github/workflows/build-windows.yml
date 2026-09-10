@@ -2,7 +2,7 @@ name: Build Windows v0.10
 
 on:
   push:
-    branches: ["main", "feature/windows-v0.10"]
+    branches: ["main"]
   pull_request:
     branches: ["main"]
   workflow_dispatch:

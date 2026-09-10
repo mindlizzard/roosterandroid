@@ -133,6 +133,7 @@ internal fun roleLabel(role: EmployeeRole): String = when (role) {
     EmployeeRole.RM -> "Restaurant Manager"
     EmployeeRole.TRAINEE -> "Trainee"
     EmployeeRole.BORROWED -> "Leenmanager"
+    EmployeeRole.HOST -> "Host(ess)"
 }
 
 internal fun shiftKindLabel(kind: ShiftKind): String = when (kind) {

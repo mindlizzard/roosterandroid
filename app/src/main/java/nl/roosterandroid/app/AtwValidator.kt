@@ -88,8 +88,7 @@ class AtwValidator {
         }.sumOf { it.durationHours }
         if (weekHours > 60.0) return false
 
-        val days = relevant.map { it.date }.distinct().sorted()
-        val streak = longestConsecutiveDayStreak(days)
+        val streak = consecutiveStreakIncluding(date, relevant)
         if (settings.treatMaxConsecutiveDaysAsHardRule && streak > settings.maxConsecutiveWorkDays) return false
         return true
     }
@@ -445,6 +444,23 @@ class AtwValidator {
             date = date.plusDays(1)
         }
         return total
+    }
+
+    private fun consecutiveStreakIncluding(date: LocalDate, shifts: List<ScheduledShift>): Int {
+        val dates = shifts.map { it.date }.toSet()
+        if (date !in dates) return 0
+        var count = 1
+        var cursor = date.minusDays(1)
+        while (cursor in dates) {
+            count++
+            cursor = cursor.minusDays(1)
+        }
+        cursor = date.plusDays(1)
+        while (cursor in dates) {
+            count++
+            cursor = cursor.plusDays(1)
+        }
+        return count
     }
 
     private fun longestConsecutiveDayStreak(days: List<LocalDate>): Int {
