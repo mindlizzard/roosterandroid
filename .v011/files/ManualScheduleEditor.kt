@@ -118,8 +118,8 @@ internal object ManualScheduleEditor {
 
         when {
             selected.custom -> customTime(parent, controller, employee, date)
-            selected.template == null -> controller.setManualAssignment(employee.id, date.toString(), null)
-            else -> controller.setManualAssignment(employee.id, date.toString(), selected.template.id)
+            selected.template == null -> controller.setManualAssignment(employee.id, date, null)
+            else -> controller.setManualAssignment(employee.id, date, selected.template.id)
         }
     }
 
