@@ -46,7 +46,7 @@ checks = {
         'archivedAutoTemplateDoesNotComeBack',
         'editingReferencedTemplatePreservesOldShiftAndCreatesReplacement',
     ],
-    'desktopApp/build.gradle.kts': ['version = "0.12.0-alpha5"'],
+    'desktopApp/build.gradle.kts': ['version = "0.12.0-alpha6"'],
 }
 
 
@@ -82,10 +82,15 @@ checks.update({
         'rooster_state.backup.json',
         'preserveCorrupt(',
         'atomicWrite(',
+        'fun loadWorkspace()',
+        'fun saveWorkspace(',
+        'fun exportWorkspaceJson(',
+        'fun importWorkspaceJson(',
+        '.fromAppState(oldState)',
     ],
     'app/build.gradle.kts': [
-        'versionCode = 16',
-        'versionName = "0.12.0-alpha5"',
+        'versionCode = 17',
+        'versionName = "0.12.0-alpha6"',
     ],
     'desktopApp/src/main/kotlin/nl/roosterandroid/desktop/DesktopController.kt': [
         'borrowEmployeeFromLocation(',
@@ -96,7 +101,8 @@ checks.update({
         'loanSourceLocationName',
     ],
     'desktopApp/src/main/kotlin/nl/roosterandroid/desktop/DesktopWorkspace.kt': [
-        'val schemaVersion: Int = 12',
+        'typealias LocationWorkspace',
+        'typealias DesktopWorkspace',
     ],
 })
 
@@ -172,6 +178,12 @@ checks.update({
         'SettingSwitch(',
         '"Actief"',
         'enabled = !host',
+        'var workspace by',
+        'fun addLocation(',
+        'fun switchLocation(',
+        'fun renameActiveLocation(',
+        'fun deleteActiveLocation()',
+        'private fun LocationPanel(',
     ],
     'desktopApp/src/main/kotlin/nl/roosterandroid/desktop/DesktopController.kt': [
         'state.removeEmployeeSafely(id)',
@@ -181,6 +193,24 @@ checks.update({
         'referencedEmployeeIsArchivedInsteadOfDeleted',
         'unusedEmployeeIsRemovedWithPersonalRules',
         'swapHistoryAlsoProtectsEmployee',
+    ],
+})
+
+
+checks.update({
+    'app/src/main/java/nl/roosterandroid/app/WorkspaceModels.kt': [
+        'data class LocationWorkspace(',
+        'data class RosterWorkspace(',
+        'val schemaVersion: Int = 12',
+        'fun withActiveState(',
+        'fun normalized()',
+        'fun AppState.copyForNewLocation(',
+        'RecurrenceType.SPECIFIC_DATE',
+    ],
+    'app/src/test/java/nl/roosterandroid/app/WorkspaceModelTest.kt': [
+        'workspaceRoundTripPreservesLocations',
+        'copyingLocationKeepsTeamButClearsDatedData',
+        'invalidActiveLocationIsNormalized',
     ],
 })
 

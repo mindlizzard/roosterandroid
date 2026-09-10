@@ -23,31 +23,27 @@ class ScheduleStorage(
     var lastLoadNotice: String? = null
         private set
 
-    fun load(): AppState {
+    fun loadWorkspace(): RosterWorkspace {
         lastLoadNotice = null
 
         val file =
-            context.filesDir.resolve(
-                fileName
-            )
+            context.filesDir.resolve(fileName)
 
         if (!file.exists()) {
-            return AppState()
+            return RosterWorkspace.default()
         }
 
-        decode(file.readText())
+        decodeWorkspace(file.readText())
             ?.let { return it }
 
         preserveCorrupt(file)
 
         val backup =
-            context.filesDir.resolve(
-                backupName
-            )
+            context.filesDir.resolve(backupName)
 
         val recovered =
             if (backup.exists()) {
-                decode(
+                decodeWorkspace(
                     runCatching {
                         backup.readText()
                     }.getOrDefault("")
@@ -60,9 +56,7 @@ class ScheduleStorage(
             runCatching {
                 atomicWrite(
                     file,
-                    json.encodeToString(
-                        recovered
-                    )
+                    json.encodeToString(recovered)
                 )
             }
 
@@ -75,27 +69,25 @@ class ScheduleStorage(
         lastLoadNotice =
             "Opslagbestand was beschadigd; geen geldige backup gevonden"
 
-        return AppState()
+        return RosterWorkspace.default()
     }
 
-    fun save(state: AppState) {
+    fun saveWorkspace(
+        workspace: RosterWorkspace
+    ) {
         val file =
-            context.filesDir.resolve(
-                fileName
-            )
+            context.filesDir.resolve(fileName)
 
         val backup =
-            context.filesDir.resolve(
-                backupName
-            )
+            context.filesDir.resolve(backupName)
 
         if (file.exists()) {
             val validCurrent =
-                runCatching {
-                    decode(
+                decodeWorkspace(
+                    runCatching {
                         file.readText()
-                    )
-                }.getOrNull()
+                    }.getOrDefault("")
+                )
 
             if (validCurrent != null) {
                 runCatching {
@@ -107,10 +99,34 @@ class ScheduleStorage(
             }
         }
 
+        val prepared =
+            workspace.normalized().copy(
+                lastSavedAt =
+                    java.time.LocalDateTime
+                        .now()
+                        .toString()
+            )
+
         atomicWrite(
             file,
-            json.encodeToString(state)
+            json.encodeToString(prepared)
         )
+    }
+
+    /*
+     * Legacy API bewust behouden.
+     */
+    fun load(): AppState =
+        loadWorkspace()
+            .activeLocation()
+            .state
+
+    fun save(state: AppState) {
+        val workspace =
+            loadWorkspace()
+                .withActiveState(state)
+
+        saveWorkspace(workspace)
     }
 
     fun exportJson(
@@ -123,14 +139,51 @@ class ScheduleStorage(
     ): AppState =
         json.decodeFromString(raw)
 
-    private fun decode(
+    fun exportWorkspaceJson(
+        workspace: RosterWorkspace
+    ): String =
+        json.encodeToString(
+            workspace.normalized()
+        )
+
+    fun importWorkspaceJson(
         raw: String
-    ): AppState? =
-        runCatching {
-            json.decodeFromString<AppState>(
-                raw
+    ): RosterWorkspace =
+        decodeWorkspace(raw)
+            ?: error(
+                "Geen geldig roosterbestand"
             )
-        }.getOrNull()
+
+    private fun decodeWorkspace(
+        raw: String
+    ): RosterWorkspace? {
+        if (raw.isBlank()) {
+            return null
+        }
+
+        runCatching {
+            json.decodeFromString<
+                RosterWorkspace
+            >(raw)
+        }.getOrNull()?.let {
+            return it.normalized()
+        }
+
+        /*
+         * Oud Android AppState-bestand
+         * automatisch naar workspace.
+         */
+        val oldState =
+            runCatching {
+                json.decodeFromString<
+                    AppState
+                >(raw)
+            }.getOrNull()
+                ?: return null
+
+        return RosterWorkspace
+            .fromAppState(oldState)
+    }
 
     private fun preserveCorrupt(
         file: java.io.File
@@ -139,7 +192,8 @@ class ScheduleStorage(
 
         val target =
             context.filesDir.resolve(
-                "rooster_state.corrupt-${System.currentTimeMillis()}.json"
+                "rooster_state.corrupt-" +
+                    "${System.currentTimeMillis()}.json"
             )
 
         runCatching {

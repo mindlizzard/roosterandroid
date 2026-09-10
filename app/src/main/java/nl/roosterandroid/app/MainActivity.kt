@@ -82,8 +82,21 @@ class AppController(private val storage: ScheduleStorage) {
     private val validator = AtwValidator()
     private val engine = ScheduleEngine(validator)
 
-    var state by mutableStateOf(storage.load())
+    var workspace by mutableStateOf(
+        storage.loadWorkspace()
+    )
         private set
+
+    val state: AppState
+        get() =
+            workspace
+                .activeLocation()
+                .state
+
+    val activeLocation: LocationWorkspace
+        get() =
+            workspace.activeLocation()
+
     var violations by mutableStateOf(validator.validate(state))
         private set
     var unfilled by mutableStateOf(emptyList<String>())
@@ -97,11 +110,23 @@ class AppController(private val storage: ScheduleStorage) {
     var scenarioSummaries by mutableStateOf(emptyList<String>())
         private set
 
-    private fun commit(newState: AppState, message: String? = null) {
-        state = newState
-        storage.save(state)
-        violations = validator.validate(state)
-        if (message != null) status = message
+    private fun commit(
+        newState: AppState,
+        message: String? = null
+    ) {
+        workspace =
+            workspace.withActiveState(
+                newState
+            )
+
+        storage.saveWorkspace(workspace)
+
+        violations =
+            validator.validate(state)
+
+        if (message != null) {
+            status = message
+        }
     }
 
     fun addEmployee(name: String, role: EmployeeRole) {
@@ -487,16 +512,196 @@ class AppController(private val storage: ScheduleStorage) {
         commit(state.copy(settings = settings))
     }
 
-    fun exportJson(): String = storage.exportJson(state)
+    fun addLocation(
+        name: String,
+        copyCurrent: Boolean
+    ) {
+        val clean = name.trim()
+
+        if (clean.isBlank()) {
+            status = "Vul een vestigingsnaam in"
+            return
+        }
+
+        val nextState =
+            if (copyCurrent) {
+                state.copyForNewLocation(clean)
+            } else {
+                AppState(
+                    year = state.year,
+                    month = state.month,
+                    settings =
+                        PlannerSettings(
+                            locationName = clean
+                        )
+                )
+            }
+
+        val location =
+            LocationWorkspace(
+                name = clean,
+                state = nextState
+            )
+
+        workspace =
+            workspace.copy(
+                activeLocationId =
+                    location.id,
+                locations =
+                    workspace.locations +
+                        location
+            )
+
+        storage.saveWorkspace(workspace)
+
+        violations =
+            validator.validate(state)
+
+        unfilled = emptyList()
+        plannerWarnings = emptyList()
+        scenarioSummaries = emptyList()
+
+        status =
+            "Vestiging $clean toegevoegd"
+    }
+
+    fun switchLocation(id: String) {
+        if (
+            workspace.locations.none {
+                it.id == id
+            }
+        ) return
+
+        workspace =
+            workspace.copy(
+                activeLocationId = id
+            )
+
+        storage.saveWorkspace(workspace)
+
+        violations =
+            validator.validate(state)
+
+        unfilled = emptyList()
+        plannerWarnings = emptyList()
+        scenarioSummaries = emptyList()
+
+        status =
+            "Vestiging ${activeLocation.name} geopend"
+    }
+
+    fun renameActiveLocation(
+        name: String
+    ) {
+        val clean = name.trim()
+
+        if (clean.isBlank()) {
+            status = "Vul een vestigingsnaam in"
+            return
+        }
+
+        val id = activeLocation.id
+
+        workspace =
+            workspace.copy(
+                locations =
+                    workspace.locations.map {
+                        if (it.id == id) {
+                            it.copy(
+                                name = clean,
+                                state =
+                                    it.state.copy(
+                                        settings =
+                                            it.state.settings.copy(
+                                                locationName = clean
+                                            )
+                                    )
+                            )
+                        } else {
+                            it
+                        }
+                    }
+            )
+
+        storage.saveWorkspace(workspace)
+
+        violations =
+            validator.validate(state)
+
+        status =
+            "Vestiging hernoemd naar $clean"
+    }
+
+    fun deleteActiveLocation(): Boolean {
+        if (
+            workspace.locations.size <= 1
+        ) {
+            status =
+                "Minimaal één vestiging moet blijven bestaan"
+            return false
+        }
+
+        val currentId =
+            activeLocation.id
+
+        val remaining =
+            workspace.locations.filterNot {
+                it.id == currentId
+            }
+
+        workspace =
+            workspace.copy(
+                activeLocationId =
+                    remaining.first().id,
+                locations = remaining
+            )
+
+        storage.saveWorkspace(workspace)
+
+        violations =
+            validator.validate(state)
+
+        unfilled = emptyList()
+        plannerWarnings = emptyList()
+        scenarioSummaries = emptyList()
+
+        status = "Vestiging verwijderd"
+
+        return true
+    }
+
+    fun exportJson(): String =
+        storage.exportWorkspaceJson(
+            workspace
+        )
 
     fun importJson(raw: String) {
-        runCatching { storage.importJson(raw) }
+        runCatching {
+            storage.importWorkspaceJson(raw)
+        }
             .onSuccess {
-                commit(it, "Import gelukt")
+                workspace = it.normalized()
+                storage.saveWorkspace(workspace)
+
+                violations =
+                    validator.validate(state)
+
                 unfilled = emptyList()
                 plannerWarnings = emptyList()
+                scenarioSummaries = emptyList()
+
+                status =
+                    "Import gelukt • " +
+                        "${workspace.locations.size} vestiging(en)"
             }
-            .onFailure { status = "Import mislukt: ${it.message ?: "ongeldig bestand"}" }
+            .onFailure {
+                status =
+                    "Import mislukt: " +
+                        (
+                            it.message
+                                ?: "ongeldig bestand"
+                        )
+            }
     }
 
     fun showStatus(message: String) { status = message }
@@ -554,7 +759,10 @@ fun RoosterApp(controller: AppController) {
             TopAppBar(title = {
                 Column {
                     Text("RoosterAndroid", fontWeight = FontWeight.Bold)
-                    Text(controller.state.settings.locationName, style = MaterialTheme.typography.labelMedium)
+                    Text(
+                        controller.activeLocation.name,
+                        style = MaterialTheme.typography.labelMedium
+                    )
                 }
             })
         },
@@ -637,6 +845,7 @@ private fun OverviewScreen(controller: AppController) {
     val warnings = controller.violations.count { it.severity == AtwValidator.Severity.WARNING }
     LazyColumn(modifier = Modifier.fillMaxSize()) {
         item { MonthHeader(controller) }
+        item { LocationPanel(controller) }
         item {
             Row(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
@@ -676,6 +885,181 @@ private fun OverviewScreen(controller: AppController) {
             InfoCard("Pauzes worden als informatie gemeld, omdat de app nog niet registreert wanneer iemand tijdens een dienst daadwerkelijk pauze neemt.")
         }
         item { Spacer(Modifier.height(24.dp)) }
+    }
+}
+
+@Composable
+private fun LocationPanel(
+    controller: AppController
+) {
+    val locations = controller.workspace.locations
+    val active = controller.activeLocation
+
+    var name by remember(active.id) {
+        mutableStateOf(active.name)
+    }
+
+    var confirmDelete by remember {
+        mutableStateOf(false)
+    }
+
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = {
+                confirmDelete = false
+            },
+            title = {
+                Text("Vestiging verwijderen")
+            },
+            text = {
+                Text(
+                    "${active.name} verwijderen?\n\n" +
+                        "Team, rooster en opgeslagen gegevens " +
+                        "van deze vestiging worden verwijderd."
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        controller.deleteActiveLocation()
+                        confirmDelete = false
+                    }
+                ) {
+                    Text("Verwijderen")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        confirmDelete = false
+                    }
+                ) {
+                    Text("Annuleren")
+                }
+            }
+        )
+    }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(
+                horizontal = 16.dp,
+                vertical = 6.dp
+            )
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement =
+                Arrangement.spacedBy(8.dp)
+        ) {
+            Text(
+                "Vestigingen • ${locations.size}",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+
+            Text(
+                active.name,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold
+            )
+
+            Text(
+                "Elke vestiging heeft een eigen team, rooster, " +
+                    "beschikbaarheid en instellingen.",
+                style = MaterialTheme.typography.bodySmall
+            )
+
+            OutlinedTextField(
+                value = name,
+                onValueChange = {
+                    name = it
+                },
+                label = {
+                    Text("Vestigingsnaam")
+                },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Row(
+                horizontalArrangement =
+                    Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    enabled = locations.size > 1,
+                    onClick = {
+                        val index =
+                            locations.indexOfFirst {
+                                it.id == active.id
+                            }.coerceAtLeast(0)
+
+                        val next =
+                            locations[
+                                (index + 1) %
+                                    locations.size
+                            ]
+
+                        controller.switchLocation(next.id)
+                    },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Volgende")
+                }
+
+                OutlinedButton(
+                    enabled = name.isNotBlank(),
+                    onClick = {
+                        controller.renameActiveLocation(name)
+                    },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Hernoem")
+                }
+            }
+
+            Row(
+                horizontalArrangement =
+                    Arrangement.spacedBy(8.dp)
+            ) {
+                Button(
+                    enabled = name.isNotBlank(),
+                    onClick = {
+                        controller.addLocation(
+                            name,
+                            true
+                        )
+                    },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Nieuwe kopie")
+                }
+
+                OutlinedButton(
+                    enabled = name.isNotBlank(),
+                    onClick = {
+                        controller.addLocation(
+                            name,
+                            false
+                        )
+                    },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Nieuwe leeg")
+                }
+            }
+
+            OutlinedButton(
+                enabled = locations.size > 1,
+                onClick = {
+                    confirmDelete = true
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Vestiging verwijderen")
+            }
+        }
     }
 }
 

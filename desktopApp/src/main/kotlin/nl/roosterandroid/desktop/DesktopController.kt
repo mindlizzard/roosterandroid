@@ -25,6 +25,7 @@ import nl.roosterandroid.app.WeeklyAvailability
 import nl.roosterandroid.app.allowsShiftOn
 import nl.roosterandroid.app.canWork
 import nl.roosterandroid.app.countsAsManager
+import nl.roosterandroid.app.copyForNewLocation
 import nl.roosterandroid.app.isExperiencedManager
 import nl.roosterandroid.app.removeEmployeeSafely
 import java.nio.file.Path
@@ -1117,18 +1118,7 @@ class DesktopController(private val storage: DesktopStorage) {
         val clean = name.trim()
         if (clean.isBlank()) return
         val copiedState = if (copyCurrent) {
-            state.copy(
-                assignments = emptyList(),
-                assignmentHistory = emptyList(),
-                availability = emptyList(),
-                absences = emptyList(),
-                personMarkers = emptyList(),
-                dayNotes = emptyList(),
-                dayDemands = emptyList(),
-                dayPartDemands = emptyList(),
-                swapHistory = emptyList(),
-                settings = state.settings.copy(locationName = clean)
-            )
+            state.copyForNewLocation(clean)
         } else {
             AppState(
                 year = state.year,
