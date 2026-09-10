@@ -130,6 +130,75 @@ class DesktopControllerTest {
         assertEquals("%PDF", bytes.copyOfRange(0, 4).toString(Charsets.US_ASCII))
     }
 
+
+    @Test
+    fun manualEditAndAutoFixUseSingleUndoStep() {
+        val directory =
+            Files.createTempDirectory(
+                "roosterplanner-undo-"
+            )
+
+        val employee = Employee(
+            name = "Undo test",
+            contractedDaysPerWeek = 0,
+            contractedHoursPerWeek = 0.0,
+            maxShiftsPerWeek = 7
+        )
+
+        val day = ShiftTemplate(
+            "day",
+            "Dag",
+            ShiftKind.DAY,
+            "09:00",
+            "17:00"
+        )
+
+        val original = AppState(
+            year = 2026,
+            month = 8,
+            employees = listOf(employee),
+            shiftTemplates = listOf(day),
+            settings =
+                quietSettings().copy(
+                    autoFixAfterManualChanges = true
+                )
+        )
+
+        val storage =
+            DesktopStorage(directory)
+
+        storage.save(
+            DesktopWorkspace.fromAppState(
+                original
+            )
+        )
+
+        val controller =
+            DesktopController(storage)
+
+        controller.setManualAssignment(
+            employee.id,
+            LocalDate.parse("2026-08-03"),
+            day.id
+        )
+
+        assertTrue(
+            controller.state.assignments.any {
+                it.employeeId == employee.id &&
+                    it.date == "2026-08-03"
+            }
+        )
+
+        controller.undo()
+
+        assertTrue(
+            controller.state.assignments.isEmpty()
+        )
+
+        assertFalse(controller.canUndo)
+        assertTrue(controller.canRedo)
+    }
+
     private fun quietSettings(): PlannerSettings = PlannerSettings(
         requireSetupDaily = false,
         requireCloseDaily = false,

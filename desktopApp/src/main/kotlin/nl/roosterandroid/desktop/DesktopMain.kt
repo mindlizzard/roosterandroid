@@ -66,7 +66,7 @@ internal class MainWindow(
     private val controller: DesktopController,
     private val storage: DesktopStorage,
     private var darkMode: Boolean
-) : JFrame("RoosterPlanner 0.12.0-alpha1") {
+) : JFrame("RoosterPlanner 0.12.0-alpha2") {
     private val locale = Locale("nl", "NL")
     private val locationCombo = JComboBox<LocationChoice>()
     private val monthLabel = JLabel()
@@ -139,7 +139,7 @@ internal class MainWindow(
                 font = font.deriveFont(Font.BOLD, 22f)
                 foreground = UiColors.blue
             })
-            add(JLabel("v0.12.0-alpha1").apply { font = font.deriveFont(Font.BOLD, 11f) })
+            add(JLabel("v0.12.0-alpha2").apply { font = font.deriveFont(Font.BOLD, 11f) })
             add(locationCombo.apply { preferredSize = Dimension(220, 34) })
             add(secondaryButton("‹") { controller.changeMonth(-1) }.apply { preferredSize = Dimension(44, 34) })
             add(monthLabel.apply {
@@ -195,7 +195,7 @@ internal class MainWindow(
                 addActionListener {
                     JOptionPane.showMessageDialog(
                         this@MainWindow,
-                        "RoosterPlanner 0.12.0-alpha1\nOffline Windows-roosterprogramma\nATW-controle, Auto-fix en meerdere vestigingen",
+                        "RoosterPlanner 0.12.0-alpha2\nOffline Windows-roosterprogramma\nATW-controle, Auto-fix en meerdere vestigingen",
                         "Over RoosterPlanner",
                         JOptionPane.INFORMATION_MESSAGE
                     )
@@ -211,7 +211,7 @@ internal class MainWindow(
         locationCombo.selectedItem = choices.firstOrNull { it.id == controller.workspace.activeLocationId }
         val ym = YearMonth.of(controller.state.year, controller.state.month)
         monthLabel.text = ym.month.getDisplayName(TextStyle.FULL, locale).replaceFirstChar { it.uppercase() } + " ${ym.year}"
-        title = "RoosterPlanner 0.12.0-alpha1 • ${controller.activeLocation.name} • ${monthLabel.text}"
+        title = "RoosterPlanner 0.12.0-alpha2 • ${controller.activeLocation.name} • ${monthLabel.text}"
         refreshingHeader = false
         statusLabel.text = controller.status
         undoButton.isEnabled = controller.canUndo && !taskRunning

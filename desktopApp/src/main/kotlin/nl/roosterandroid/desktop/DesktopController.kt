@@ -91,7 +91,9 @@ class DesktopController(private val storage: DesktopStorage) {
         notifyListeners()
     }
 
-    fun autoFix(): AutoFixReport {
+    fun autoFix(
+        recordUndo: Boolean = true
+    ): AutoFixReport {
         val original = preparePlannerState(state)
         val protectLocks = original.settings.protectManualAssignmentsDuringAutoFix
         var working = if (protectLocks) {
@@ -162,9 +164,13 @@ class DesktopController(private val storage: DesktopStorage) {
             finalState,
             buildString {
                 append("Auto-fix klaar")
-                if (unlocked > 0) append(" • $unlocked handmatige dienst(en) herpland")
+                if (unlocked > 0)
+                    append(
+                        " • $unlocked handmatige dienst(en) herpland"
+                    )
                 append(" • $finalErrors fout(en)")
-            }
+            },
+            recordUndo = recordUndo
         )
         unfilled = result.unfilled
         plannerWarnings = result.warnings
@@ -502,7 +508,7 @@ class DesktopController(private val storage: DesktopStorage) {
                 "${sickEmployee.name} ziekgemeld • Auto-fix zoekt vervanging"
             }
         )
-        autoFix()
+        autoFix(recordUndo = false)
         return replacement?.name
     }
 
@@ -727,7 +733,11 @@ class DesktopController(private val storage: DesktopStorage) {
                 state.copy(assignments = without),
                 "Dienst op vrij gezet"
             )
-            if (state.settings.autoFixAfterManualChanges) autoFix()
+            if (
+                state.settings.autoFixAfterManualChanges
+            ) {
+                autoFix(recordUndo = false)
+            }
             return
         }
 
@@ -776,7 +786,11 @@ class DesktopController(private val storage: DesktopStorage) {
 
         commitActive(proposed, "Handmatige dienst opgeslagen")
 
-        if (state.settings.autoFixAfterManualChanges) autoFix()
+        if (
+            state.settings.autoFixAfterManualChanges
+        ) {
+            autoFix(recordUndo = false)
+        }
     }
 
     fun swapAssignments(
@@ -1237,7 +1251,11 @@ class DesktopController(private val storage: DesktopStorage) {
     private fun violationKey(v: AtwValidator.Violation): String =
         "${v.employeeId}|${v.date}|${v.rule}|${v.message}"
 
-    private fun commitActive(newState: AppState, message: String) {
+    private fun commitActive(
+        newState: AppState,
+        message: String,
+        recordUndo: Boolean = true
+    ) {
         val location = activeLocation
         val normalized = newState.copy(
             settings = newState.settings.copy(locationName = location.name)
@@ -1245,17 +1263,32 @@ class DesktopController(private val storage: DesktopStorage) {
         commitWorkspace(
             workspace.copy(
                 locations = workspace.locations.map {
-                    if (it.id == location.id) it.copy(state = normalized) else it
+                    if (it.id == location.id)
+                        it.copy(state = normalized)
+                    else
+                        it
                 }
             ),
-            message
+            message,
+            recordUndo = recordUndo
         )
     }
 
-    private fun commitWorkspace(next: DesktopWorkspace, message: String) {
-        undo.addLast(workspace)
-        while (undo.size > 30) undo.removeFirst()
-        redo.clear()
+    private fun commitWorkspace(
+        next: DesktopWorkspace,
+        message: String,
+        recordUndo: Boolean = true
+    ) {
+        if (recordUndo) {
+            undo.addLast(workspace)
+
+            while (undo.size > 30) {
+                undo.removeFirst()
+            }
+
+            redo.clear()
+        }
+
         workspace = next
         storage.save(workspace)
         violations = validator.validate(state)
@@ -1396,7 +1429,7 @@ class DesktopController(private val storage: DesktopStorage) {
         if (
             state.settings.autoFixAfterManualChanges
         ) {
-            autoFix()
+            autoFix(recordUndo = false)
         }
     }
 }

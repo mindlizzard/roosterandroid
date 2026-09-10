@@ -229,7 +229,7 @@ internal class RulesPanel(private val controller: DesktopController) : JPanel(Bo
             """
             De planner controleert de algemene Nederlandse Arbeidstijdenwet voor werknemers van 18 jaar en ouder.
 
-            In versie 0.12.0-alpha1 worden onder andere gecontroleerd:
+            In versie 0.12.0-alpha2 worden onder andere gecontroleerd:
             • maximaal 12 uur per dienst;
             • maximaal 60 uur per week;
             • gemiddeld maximaal 55 uur over 4 weken en 48 uur over 16 weken;

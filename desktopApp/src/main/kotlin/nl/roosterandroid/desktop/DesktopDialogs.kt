@@ -126,25 +126,48 @@ internal object DesktopDialogs {
                 existing?.active ?: true
             )
 
-        if (existing == null) {
-            role.addActionListener {
-                val selectedRole =
-                    role.selectedItem
-                        as EmployeeRole
+        fun applyRoleDefaults() {
+            val selectedRole =
+                role.selectedItem
+                    as EmployeeRole
 
-                val managerRole =
-                    selectedRole.countsAsManager()
+            val managerRole =
+                selectedRole.countsAsManager()
 
-                setup.isSelected =
-                    managerRole &&
-                        selectedRole !=
-                            EmployeeRole.BORROWED
+            setup.isSelected =
+                managerRole &&
+                    selectedRole !=
+                        EmployeeRole.BORROWED
 
-                day.isSelected = true
-                middle.isSelected = true
-                close.isSelected = managerRole
-                kpi.isSelected = managerRole
+            day.isSelected = true
+            middle.isSelected = true
+            close.isSelected = managerRole
+            kpi.isSelected = managerRole
+
+            val host =
+                selectedRole ==
+                    EmployeeRole.HOST
+
+            setup.isEnabled = !host
+            close.isEnabled = !host
+            kpi.isEnabled = !host
+
+            if (host) {
+                setup.isSelected = false
+                close.isSelected = false
+                kpi.isSelected = false
             }
+        }
+
+        role.addActionListener {
+            applyRoleDefaults()
+        }
+
+        if (
+            existing == null ||
+            existing.role == EmployeeRole.HOST
+        ) {
+            applyRoleDefaults()
         }
 
         val form = formPanel(
@@ -239,11 +262,20 @@ internal object DesktopDialogs {
                     hourCount,
                 maxShiftsPerWeek =
                     maximumCount,
-                canSetup = setup.isSelected,
+                canSetup =
+                    setup.isSelected &&
+                        role.selectedItem !=
+                            EmployeeRole.HOST,
                 canDay = day.isSelected,
                 canMiddle = middle.isSelected,
-                canClose = close.isSelected,
-                canKpi = kpi.isSelected,
+                canClose =
+                    close.isSelected &&
+                        role.selectedItem !=
+                            EmployeeRole.HOST,
+                canKpi =
+                    kpi.isSelected &&
+                        role.selectedItem !=
+                            EmployeeRole.HOST,
                 active = active.isSelected
             )
     }

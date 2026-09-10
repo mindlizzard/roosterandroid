@@ -46,7 +46,7 @@ checks = {
         'archivedAutoTemplateDoesNotComeBack',
         'editingReferencedTemplatePreservesOldShiftAndCreatesReplacement',
     ],
-    'desktopApp/build.gradle.kts': ['version = "0.12.0-alpha1"'],
+    'desktopApp/build.gradle.kts': ['version = "0.12.0-alpha2"'],
 }
 
 
@@ -84,8 +84,8 @@ checks.update({
         'atomicWrite(',
     ],
     'app/build.gradle.kts': [
-        'versionCode = 12',
-        'versionName = "0.12.0-alpha1"',
+        'versionCode = 13',
+        'versionName = "0.12.0-alpha2"',
     ],
     'desktopApp/src/main/kotlin/nl/roosterandroid/desktop/DesktopController.kt': [
         'borrowEmployeeFromLocation(',
@@ -97,6 +97,23 @@ checks.update({
     ],
     'desktopApp/src/main/kotlin/nl/roosterandroid/desktop/DesktopWorkspace.kt': [
         'val schemaVersion: Int = 12',
+    ],
+})
+
+
+checks.update({
+    'desktopApp/src/main/kotlin/nl/roosterandroid/desktop/DesktopController.kt': [
+        'recordUndo: Boolean = true',
+        'autoFix(recordUndo = false)',
+        'if (recordUndo) {',
+    ],
+    'desktopApp/src/main/kotlin/nl/roosterandroid/desktop/DesktopDialogs.kt': [
+        'fun applyRoleDefaults()',
+        'EmployeeRole.HOST',
+        'setup.isEnabled = !host',
+    ],
+    'desktopApp/src/test/kotlin/nl/roosterandroid/desktop/DesktopControllerTest.kt': [
+        'manualEditAndAutoFixUseSingleUndoStep',
     ],
 })
 
