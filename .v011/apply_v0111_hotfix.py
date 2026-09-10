@@ -277,7 +277,7 @@ controller_methods = '''    fun removeTemplate(templateId: String) {
             return
         }
         val updated = state.shiftTemplates.map {
-            if (it.id == templateId) it.copy(archived = true) else it
+            if (it.id == templateId) template.copy(archived = true) else it
         }
         commitActive(state.copy(shiftTemplates = updated), "Diensttemplate verwijderd")
     }
@@ -319,7 +319,7 @@ controller_methods = '''    fun removeTemplate(templateId: String) {
 '''
 if 'fun removeTemplate(templateId: String)' not in s:
     s = insert_before_class_end(s, 'class DesktopController', controller_methods)
-elif 'template.copy(archived = true)' not in s:
+elif 'template.copy(archived = true)' not in function_block(s, '    fun removeTemplate(templateId: String)')[2]:
     remove_template_fun = '''    fun removeTemplate(templateId: String) {
         val template = state.shiftTemplates.firstOrNull {
             it.id == templateId && !it.archived
@@ -329,7 +329,7 @@ elif 'template.copy(archived = true)' not in s:
             return
         }
         val updated = state.shiftTemplates.map {
-            if (it.id == templateId) it.copy(archived = true) else it
+            if (it.id == templateId) template.copy(archived = true) else it
         }
         commitActive(
             state.copy(shiftTemplates = updated),
