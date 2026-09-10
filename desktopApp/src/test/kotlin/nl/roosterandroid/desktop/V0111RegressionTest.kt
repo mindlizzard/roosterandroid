@@ -20,6 +20,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.nio.file.Files
 import java.time.LocalDate
+import kotlin.io.path.writeText
 
 class V0111RegressionTest {
     @Test
@@ -421,6 +422,91 @@ class V0111RegressionTest {
 
         assertTrue(
             controller.state.shiftTemplates.isEmpty()
+        )
+    }
+
+
+    @Test
+    fun corruptedPrimaryStateRestoresBackup() {
+        val directory =
+            Files.createTempDirectory(
+                "roosterplanner-v0112-recovery-"
+            )
+
+        val storage =
+            DesktopStorage(directory)
+
+        val backupEmployee =
+            Employee(
+                id = "backup-manager",
+                name = "Backup manager"
+            )
+
+        storage.save(
+            DesktopWorkspace.fromAppState(
+                AppState(
+                    employees =
+                        listOf(
+                            backupEmployee
+                        )
+                )
+            )
+        )
+
+        storage.save(
+            DesktopWorkspace.fromAppState(
+                AppState(
+                    employees =
+                        listOf(
+                            Employee(
+                                id = "new-manager",
+                                name = "Nieuwe manager"
+                            )
+                        )
+                )
+            )
+        )
+
+        storage.stateFile.writeText(
+            "{ dit is kapotte json"
+        )
+
+        val recoveredStorage =
+            DesktopStorage(directory)
+
+        val recovered =
+            recoveredStorage.load()
+
+        assertEquals(
+            "Backup manager",
+            recovered.activeLocation()
+                .state
+                .employees
+                .single()
+                .name
+        )
+
+        assertTrue(
+            recoveredStorage
+                .lastLoadNotice
+                ?.contains(
+                    "backup",
+                    ignoreCase = true
+                ) == true
+        )
+
+        val secondLoad =
+            DesktopStorage(directory)
+                .load()
+
+        assertEquals(
+            "Backup manager",
+            secondLoad
+                .activeLocation()
+                .state
+                .employees
+                .single()
+                .name
         )
     }
 

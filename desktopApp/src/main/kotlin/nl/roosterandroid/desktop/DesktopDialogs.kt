@@ -40,27 +40,106 @@ import javax.swing.border.EmptyBorder
 internal object DesktopDialogs {
     private val dayLabels = arrayOf("Ma", "Di", "Wo", "Do", "Vr", "Za", "Zo")
 
-    fun employee(parent: Component, existing: Employee? = null): Employee? {
-        val name = JTextField(existing?.name.orEmpty(), 22)
-        val role = JComboBox(EmployeeRole.entries.toTypedArray()).apply {
-            selectedItem = existing?.role ?: EmployeeRole.MANAGER
-            renderer = LabelListRenderer { roleLabel(it as EmployeeRole) }
-        }
-        val days = JSpinner(SpinnerNumberModel(existing?.contractedDaysPerWeek ?: 5, 0, 7, 1))
-        val hours = JSpinner(SpinnerNumberModel(existing?.contractedHoursPerWeek ?: 40.0, 0.0, 60.0, 1.0))
-        val maximum = JSpinner(SpinnerNumberModel(existing?.maxShiftsPerWeek ?: 5, 1, 7, 1))
-        val setup = JCheckBox("Setup", existing?.canSetup ?: true)
-        val day = JCheckBox("Dag", existing?.canDay ?: true)
-        val middle = JCheckBox("Tussen", existing?.canMiddle ?: true)
-        val close = JCheckBox("Sluit", existing?.canClose ?: true)
-        val kpi = JCheckBox("KPI", existing?.canKpi ?: true)
-        val active = JCheckBox("Actief", existing?.active ?: true)
+    fun employee(
+        parent: Component,
+        existing: Employee? = null
+    ): Employee? {
+        val name =
+            JTextField(existing?.name.orEmpty(), 22)
+
+        val role =
+            JComboBox(
+                EmployeeRole.entries.toTypedArray()
+            ).apply {
+                selectedItem =
+                    existing?.role
+                        ?: EmployeeRole.MANAGER
+
+                renderer =
+                    LabelListRenderer {
+                        roleLabel(
+                            it as EmployeeRole
+                        )
+                    }
+            }
+
+        val days = JSpinner(
+            SpinnerNumberModel(
+                existing?.contractedDaysPerWeek ?: 5,
+                0,
+                7,
+                1
+            )
+        )
+
+        val hours = JSpinner(
+            SpinnerNumberModel(
+                existing?.contractedHoursPerWeek ?: 40.0,
+                0.0,
+                84.0,
+                1.0
+            )
+        )
+
+        val maximum = JSpinner(
+            SpinnerNumberModel(
+                existing?.maxShiftsPerWeek ?: 5,
+                1,
+                7,
+                1
+            )
+        )
+
+        val setup =
+            JCheckBox(
+                "Setup",
+                existing?.canSetup ?: true
+            )
+
+        val day =
+            JCheckBox(
+                "Dag",
+                existing?.canDay ?: true
+            )
+
+        val middle =
+            JCheckBox(
+                "Tussen",
+                existing?.canMiddle ?: true
+            )
+
+        val close =
+            JCheckBox(
+                "Sluit",
+                existing?.canClose ?: true
+            )
+
+        val kpi =
+            JCheckBox(
+                "KPI",
+                existing?.canKpi ?: true
+            )
+
+        val active =
+            JCheckBox(
+                "Actief",
+                existing?.active ?: true
+            )
 
         if (existing == null) {
             role.addActionListener {
-                val selectedRole = role.selectedItem as EmployeeRole
-                val managerRole = selectedRole.countsAsManager()
-                setup.isSelected = managerRole && selectedRole != EmployeeRole.BORROWED
+                val selectedRole =
+                    role.selectedItem
+                        as EmployeeRole
+
+                val managerRole =
+                    selectedRole.countsAsManager()
+
+                setup.isSelected =
+                    managerRole &&
+                        selectedRole !=
+                            EmployeeRole.BORROWED
+
                 day.isSelected = true
                 middle.isSelected = true
                 close.isSelected = managerRole
@@ -74,27 +153,99 @@ internal object DesktopDialogs {
             "Contractdagen/week" to days,
             "Contracturen/week" to hours,
             "Max. diensten/week" to maximum,
-            "Toegestane diensten" to JPanel().apply { add(setup); add(day); add(middle); add(close); add(kpi) },
+            "Toegestane diensten" to
+                JPanel().apply {
+                    add(setup)
+                    add(day)
+                    add(middle)
+                    add(close)
+                    add(kpi)
+                },
             "Status" to active
         )
-        if (!confirm(parent, if (existing == null) "Medewerker toevoegen" else "Medewerker wijzigen", form)) return null
+
+        if (
+            !confirm(
+                parent,
+                if (existing == null)
+                    "Medewerker toevoegen"
+                else
+                    "Medewerker wijzigen",
+                form
+            )
+        ) {
+            return null
+        }
+
         if (name.text.isBlank()) {
             error(parent, "Vul een naam in")
             return null
         }
-        return (existing ?: Employee(name = name.text.trim())).copy(
-            name = name.text.trim(),
-            role = role.selectedItem as EmployeeRole,
-            contractedDaysPerWeek = days.value as Int,
-            contractedHoursPerWeek = (hours.value as Number).toDouble(),
-            maxShiftsPerWeek = maximum.value as Int,
-            canSetup = setup.isSelected,
-            canDay = day.isSelected,
-            canMiddle = middle.isSelected,
-            canClose = close.isSelected,
-            canKpi = kpi.isSelected,
-            active = active.isSelected
-        )
+
+        val dayCount =
+            days.value as Int
+
+        val hourCount =
+            (hours.value as Number)
+                .toDouble()
+
+        val maximumCount =
+            maximum.value as Int
+
+        if (
+            dayCount == 0 &&
+            hourCount > 0.0
+        ) {
+            error(
+                parent,
+                "Contracturen kunnen niet hoger dan 0 zijn als contractdagen 0 zijn."
+            )
+            return null
+        }
+
+        if (dayCount > maximumCount) {
+            error(
+                parent,
+                "Contractdagen ($dayCount) zijn hoger dan het maximum aantal diensten ($maximumCount). " +
+                    "Zo kan de planner het contract nooit halen."
+            )
+            return null
+        }
+
+        if (
+            dayCount > 0 &&
+            hourCount > dayCount * 12.0
+        ) {
+            error(
+                parent,
+                "De contracturen passen niet binnen $dayCount diensten van maximaal 12 uur."
+            )
+            return null
+        }
+
+        return (
+            existing
+                ?: Employee(
+                    name = name.text.trim()
+                )
+            ).copy(
+                name = name.text.trim(),
+                role =
+                    role.selectedItem
+                        as EmployeeRole,
+                contractedDaysPerWeek =
+                    dayCount,
+                contractedHoursPerWeek =
+                    hourCount,
+                maxShiftsPerWeek =
+                    maximumCount,
+                canSetup = setup.isSelected,
+                canDay = day.isSelected,
+                canMiddle = middle.isSelected,
+                canClose = close.isSelected,
+                canKpi = kpi.isSelected,
+                active = active.isSelected
+            )
     }
 
     fun weeklyAvailability(
@@ -103,46 +254,167 @@ internal object DesktopDialogs {
         weekday: Int,
         existing: WeeklyAvailability?
     ): WeeklyAvailability? {
-        val available = JCheckBox("Beschikbaar", existing?.available ?: true)
-        val earliest = JTextField(existing?.earliestStart.orEmpty(), 8)
-        val latest = JTextField(existing?.latestEnd.orEmpty(), 8)
-        val kinds = arrayOf<ShiftKind?>(null, *ShiftKind.entries.toTypedArray())
-        val fixed = JComboBox(kinds).apply {
-            selectedItem = existing?.fixedShiftKind
-            renderer = LabelListRenderer { item -> item?.let { shiftKindLabel(it as ShiftKind) } ?: "Geen vaste dienst" }
-        }
+        val available =
+            JCheckBox(
+                "Beschikbaar",
+                existing?.available ?: true
+            )
+
+        val earliest =
+            JTextField(
+                existing?.earliestStart.orEmpty(),
+                8
+            )
+
+        val latest =
+            JTextField(
+                existing?.latestEnd.orEmpty(),
+                8
+            )
+
+        val kinds =
+            arrayOf<ShiftKind?>(
+                null,
+                *ShiftKind.entries.toTypedArray()
+            )
+
+        val fixed =
+            JComboBox(kinds).apply {
+                selectedItem =
+                    existing?.fixedShiftKind
+
+                renderer =
+                    LabelListRenderer { item ->
+                        item?.let {
+                            shiftKindLabel(
+                                it as ShiftKind
+                            )
+                        } ?: "Geen vaste dienst"
+                    }
+            }
+
         val form = formPanel(
             "Medewerker" to JLabel(employee.name),
-            "Weekdag" to JLabel(dayLabels[weekday - 1]),
+            "Weekdag" to
+                JLabel(dayLabels[weekday - 1]),
             "Beschikbaar" to available,
             "Vroegste start" to earliest,
             "Laatste einde" to latest,
             "Vaste dienst" to fixed
         )
-        if (!confirm(parent, "Vaste weekbeschikbaarheid", form)) return null
-        if (!validOptionalTime(earliest.text) || !validOptionalTime(latest.text)) {
-            error(parent, "Gebruik tijden als UU:mm, bijvoorbeeld 09:00")
+
+        if (
+            !confirm(
+                parent,
+                "Vaste weekbeschikbaarheid",
+                form
+            )
+        ) {
             return null
         }
+
+        if (
+            !validOptionalTime(earliest.text) ||
+            !validOptionalTime(latest.text)
+        ) {
+            error(
+                parent,
+                "Gebruik tijden als UU:mm, bijvoorbeeld 09:00."
+            )
+            return null
+        }
+
+        val fixedKind =
+            fixed.selectedItem as ShiftKind?
+
+        if (
+            available.isSelected &&
+            fixedKind != null &&
+            !employee.canWork(fixedKind)
+        ) {
+            error(
+                parent,
+                "${employee.name} mag het gekozen diensttype niet werken. Pas eerst de medewerkerinstellingen aan."
+            )
+            return null
+        }
+
         return WeeklyAvailability(
             employeeId = employee.id,
             weekday = weekday,
             available = available.isSelected,
-            earliestStart = earliest.text.trim().ifBlank { null },
-            latestEnd = latest.text.trim().ifBlank { null },
-            fixedShiftKind = fixed.selectedItem as ShiftKind?
+            earliestStart =
+                if (available.isSelected)
+                    earliest.text.trim()
+                        .ifBlank { null }
+                else
+                    null,
+            latestEnd =
+                if (available.isSelected)
+                    latest.text.trim()
+                        .ifBlank { null }
+                else
+                    null,
+            fixedShiftKind =
+                if (available.isSelected)
+                    fixedKind
+                else
+                    null
         )
     }
 
-    fun dateAvailability(parent: Component, state: AppState, employee: Employee): Availability? {
-        val date = JTextField(LocalDate.now().toString(), 12)
-        val available = JCheckBox("Beschikbaar", true)
-        val earliest = JTextField("", 8)
-        val latest = JTextField("", 8)
-        val kinds = arrayOf<ShiftKind?>(null, *ShiftKind.entries.toTypedArray())
-        val fixed = JComboBox(kinds).apply {
-            renderer = LabelListRenderer { item -> item?.let { shiftKindLabel(it as ShiftKind) } ?: "Geen vaste dienst" }
-        }
+    fun dateAvailability(
+        parent: Component,
+        state: AppState,
+        employee: Employee,
+        existing: Availability? = null
+    ): Availability? {
+        val date =
+            JTextField(
+                existing?.date
+                    ?: LocalDate.now().toString(),
+                12
+            )
+
+        val available =
+            JCheckBox(
+                "Beschikbaar",
+                existing?.available ?: true
+            )
+
+        val earliest =
+            JTextField(
+                existing?.earliestStart.orEmpty(),
+                8
+            )
+
+        val latest =
+            JTextField(
+                existing?.latestEnd.orEmpty(),
+                8
+            )
+
+        val kinds =
+            arrayOf<ShiftKind?>(
+                null,
+                *ShiftKind.entries.toTypedArray()
+            )
+
+        val fixed =
+            JComboBox(kinds).apply {
+                selectedItem =
+                    existing?.fixedShiftKind
+
+                renderer =
+                    LabelListRenderer { item ->
+                        item?.let {
+                            shiftKindLabel(
+                                it as ShiftKind
+                            )
+                        } ?: "Geen vaste dienst"
+                    }
+            }
+
         val form = formPanel(
             "Medewerker" to JLabel(employee.name),
             "Datum (JJJJ-MM-DD)" to date,
@@ -151,19 +423,75 @@ internal object DesktopDialogs {
             "Laatste einde" to latest,
             "Vaste dienst" to fixed
         )
-        if (!confirm(parent, "Afwijking op datum", form)) return null
-        val parsed = runCatching { LocalDate.parse(date.text.trim()) }.getOrNull()
-        if (parsed == null || !validOptionalTime(earliest.text) || !validOptionalTime(latest.text)) {
-            error(parent, "Controleer datum en tijden")
+
+        if (
+            !confirm(
+                parent,
+                if (existing == null)
+                    "Afwijking op datum"
+                else
+                    "Datumuitzondering wijzigen",
+                form
+            )
+        ) {
             return null
         }
+
+        val parsed =
+            runCatching {
+                LocalDate.parse(
+                    date.text.trim()
+                )
+            }.getOrNull()
+
+        if (
+            parsed == null ||
+            !validOptionalTime(earliest.text) ||
+            !validOptionalTime(latest.text)
+        ) {
+            error(
+                parent,
+                "Controleer datum en tijden."
+            )
+            return null
+        }
+
+        val fixedKind =
+            fixed.selectedItem as ShiftKind?
+
+        if (
+            available.isSelected &&
+            fixedKind != null &&
+            !employee.canWork(fixedKind)
+        ) {
+            error(
+                parent,
+                "${employee.name} mag het gekozen diensttype niet werken."
+            )
+            return null
+        }
+
         return Availability(
             employeeId = employee.id,
             date = parsed.toString(),
             available = available.isSelected,
-            earliestStart = earliest.text.trim().ifBlank { null },
-            latestEnd = latest.text.trim().ifBlank { null },
-            fixedShiftKind = fixed.selectedItem as ShiftKind?
+            earliestStart =
+                if (available.isSelected)
+                    earliest.text.trim()
+                        .ifBlank { null }
+                else
+                    null,
+            latestEnd =
+                if (available.isSelected)
+                    latest.text.trim()
+                        .ifBlank { null }
+                else
+                    null,
+            fixedShiftKind =
+                if (available.isSelected)
+                    fixedKind
+                else
+                    null
         )
     }
 
@@ -200,21 +528,86 @@ internal object DesktopDialogs {
         )
     }
 
-    fun absence(parent: Component, state: AppState, existing: Absence? = null): Absence? {
-        if (state.employees.isEmpty()) return null
-        val employees = state.employees.filter { it.active }
-        val employee = JComboBox(employees.toTypedArray()).apply {
-            selectedItem = employees.firstOrNull { it.id == existing?.employeeId } ?: employees.first()
-            renderer = LabelListRenderer { (it as Employee).name }
+    fun absence(
+        parent: Component,
+        state: AppState,
+        existing: Absence? = null
+    ): Absence? {
+        val employees =
+            state.employees.filter {
+                it.active ||
+                    it.id == existing?.employeeId
+            }
+
+        if (employees.isEmpty()) {
+            error(
+                parent,
+                "Er zijn geen medewerkers beschikbaar."
+            )
+            return null
         }
-        val type = JComboBox(AbsenceType.entries.toTypedArray()).apply {
-            selectedItem = existing?.type ?: AbsenceType.VACATION
-            renderer = LabelListRenderer { absenceLabel(it as AbsenceType) }
-        }
-        val status = JComboBox(AbsenceStatus.entries.toTypedArray()).apply { selectedItem = existing?.status ?: AbsenceStatus.APPROVED }
-        val start = JTextField(existing?.startDate ?: LocalDate.now().toString(), 12)
-        val end = JTextField(existing?.endDate ?: start.text, 12)
-        val note = JTextField(existing?.note.orEmpty(), 24)
+
+        val employee =
+            JComboBox(
+                employees.toTypedArray()
+            ).apply {
+                selectedItem =
+                    employees.firstOrNull {
+                        it.id ==
+                            existing?.employeeId
+                    } ?: employees.first()
+
+                renderer =
+                    LabelListRenderer {
+                        (it as Employee).name
+                    }
+            }
+
+        val type =
+            JComboBox(
+                AbsenceType.entries.toTypedArray()
+            ).apply {
+                selectedItem =
+                    existing?.type
+                        ?: AbsenceType.VACATION
+
+                renderer =
+                    LabelListRenderer {
+                        absenceLabel(
+                            it as AbsenceType
+                        )
+                    }
+            }
+
+        val status =
+            JComboBox(
+                AbsenceStatus.entries.toTypedArray()
+            ).apply {
+                selectedItem =
+                    existing?.status
+                        ?: AbsenceStatus.APPROVED
+            }
+
+        val start =
+            JTextField(
+                existing?.startDate
+                    ?: LocalDate.now().toString(),
+                12
+            )
+
+        val end =
+            JTextField(
+                existing?.endDate
+                    ?: start.text,
+                12
+            )
+
+        val note =
+            JTextField(
+                existing?.note.orEmpty(),
+                24
+            )
+
         val form = formPanel(
             "Medewerker" to employee,
             "Type" to type,
@@ -223,21 +616,63 @@ internal object DesktopDialogs {
             "Tot en met" to end,
             "Opmerking" to note
         )
-        if (!confirm(parent, "Afwezigheid", form)) return null
-        val startDate = runCatching { LocalDate.parse(start.text.trim()) }.getOrNull()
-        val endDate = runCatching { LocalDate.parse(end.text.trim()) }.getOrNull()
-        if (startDate == null || endDate == null || endDate.isBefore(startDate)) {
-            error(parent, "Controleer de periode")
+
+        if (
+            !confirm(
+                parent,
+                "Afwezigheid",
+                form
+            )
+        ) {
             return null
         }
+
+        val startDate =
+            runCatching {
+                LocalDate.parse(
+                    start.text.trim()
+                )
+            }.getOrNull()
+
+        val endDate =
+            runCatching {
+                LocalDate.parse(
+                    end.text.trim()
+                )
+            }.getOrNull()
+
+        if (
+            startDate == null ||
+            endDate == null ||
+            endDate.isBefore(startDate)
+        ) {
+            error(
+                parent,
+                "Controleer de periode."
+            )
+            return null
+        }
+
         return Absence(
-            id = existing?.id ?: UUID.randomUUID().toString(),
-            employeeId = (employee.selectedItem as Employee).id,
-            startDate = startDate.toString(),
-            endDate = endDate.toString(),
-            type = type.selectedItem as AbsenceType,
-            status = status.selectedItem as AbsenceStatus,
-            note = note.text.trim()
+            id =
+                existing?.id
+                    ?: UUID.randomUUID()
+                        .toString(),
+            employeeId =
+                (employee.selectedItem
+                    as Employee).id,
+            startDate =
+                startDate.toString(),
+            endDate =
+                endDate.toString(),
+            type =
+                type.selectedItem
+                    as AbsenceType,
+            status =
+                status.selectedItem
+                    as AbsenceStatus,
+            note =
+                note.text.trim()
         )
     }
 
@@ -327,19 +762,100 @@ internal object DesktopDialogs {
         )
     }
 
-    fun responsibility(parent: Component, state: AppState): ResponsibilityRule? {
-        val employees = state.employees.filter { it.active }
-        if (employees.isEmpty()) return null
-        val employee = JComboBox(employees.toTypedArray()).apply { renderer = LabelListRenderer { (it as Employee).name } }
-        val type = JComboBox(ResponsibilityType.entries.toTypedArray()).apply {
-            renderer = LabelListRenderer { responsibilityLabel(it as ResponsibilityType) }
+    fun responsibility(
+        parent: Component,
+        state: AppState,
+        existing: ResponsibilityRule? = null
+    ): ResponsibilityRule? {
+        val employees =
+            state.employees.filter {
+                it.active ||
+                    it.id == existing?.employeeId
+            }
+
+        if (employees.isEmpty()) {
+            return null
         }
-        val recurrence = JComboBox(RecurrenceType.entries.toTypedArray())
-        val weekday = JComboBox(dayLabels)
-        val monthDay = JSpinner(SpinnerNumberModel(1, 1, 31, 1))
-        val date = JTextField(LocalDate.now().toString(), 12)
-        val label = JTextField("", 18)
-        val prefer = JCheckBox("Planner zet deze persoon bij voorkeur op een gewone dienst", true)
+
+        val employee =
+            JComboBox(
+                employees.toTypedArray()
+            ).apply {
+                selectedItem =
+                    employees.firstOrNull {
+                        it.id ==
+                            existing?.employeeId
+                    } ?: employees.first()
+
+                renderer =
+                    LabelListRenderer {
+                        (it as Employee).name
+                    }
+            }
+
+        val type =
+            JComboBox(
+                ResponsibilityType.entries
+                    .toTypedArray()
+            ).apply {
+                selectedItem =
+                    existing?.type
+                        ?: ResponsibilityType.WEEK_COUNT
+
+                renderer =
+                    LabelListRenderer {
+                        responsibilityLabel(
+                            it as ResponsibilityType
+                        )
+                    }
+            }
+
+        val recurrence =
+            JComboBox(
+                RecurrenceType.entries
+                    .toTypedArray()
+            ).apply {
+                selectedItem =
+                    existing?.recurrence
+                        ?: RecurrenceType.WEEKLY
+            }
+
+        val weekday =
+            JComboBox(dayLabels).apply {
+                selectedIndex =
+                    ((existing?.weekday ?: 1)
+                        .coerceIn(1, 7)) - 1
+            }
+
+        val monthDay =
+            JSpinner(
+                SpinnerNumberModel(
+                    existing?.monthDay ?: 1,
+                    1,
+                    31,
+                    1
+                )
+            )
+
+        val date =
+            JTextField(
+                existing?.date
+                    ?: LocalDate.now().toString(),
+                12
+            )
+
+        val label =
+            JTextField(
+                existing?.label.orEmpty(),
+                18
+            )
+
+        val prefer =
+            JCheckBox(
+                "Planner zet deze persoon bij voorkeur op een gewone dienst",
+                existing?.preferScheduled ?: true
+            )
+
         val form = formPanel(
             "Medewerker" to employee,
             "Taak" to type,
@@ -350,51 +866,194 @@ internal object DesktopDialogs {
             "Eigen label" to label,
             "Planning" to prefer
         )
-        if (!confirm(parent, "Taak of verantwoordelijkheid", form)) return null
-        val selectedRecurrence = recurrence.selectedItem as RecurrenceType
-        val parsedDate = runCatching { LocalDate.parse(date.text.trim()) }.getOrNull()
-        if (selectedRecurrence == RecurrenceType.SPECIFIC_DATE && parsedDate == null) {
-            error(parent, "Controleer de specifieke datum")
+
+        if (
+            !confirm(
+                parent,
+                if (existing == null)
+                    "Taak of verantwoordelijkheid"
+                else
+                    "Taak wijzigen",
+                form
+            )
+        ) {
             return null
         }
+
+        val selectedRecurrence =
+            recurrence.selectedItem
+                as RecurrenceType
+
+        val parsedDate =
+            runCatching {
+                LocalDate.parse(
+                    date.text.trim()
+                )
+            }.getOrNull()
+
+        if (
+            selectedRecurrence ==
+                RecurrenceType.SPECIFIC_DATE &&
+            parsedDate == null
+        ) {
+            error(
+                parent,
+                "Controleer de specifieke datum."
+            )
+            return null
+        }
+
         return ResponsibilityRule(
-            employeeId = (employee.selectedItem as Employee).id,
-            type = type.selectedItem as ResponsibilityType,
-            recurrence = selectedRecurrence,
-            weekday = weekday.selectedIndex + 1,
-            monthDay = monthDay.value as Int,
-            date = parsedDate?.toString(),
-            label = label.text.trim(),
-            preferScheduled = prefer.isSelected
+            id =
+                existing?.id
+                    ?: UUID.randomUUID()
+                        .toString(),
+            employeeId =
+                (employee.selectedItem
+                    as Employee).id,
+            type =
+                type.selectedItem
+                    as ResponsibilityType,
+            recurrence =
+                selectedRecurrence,
+            weekday =
+                weekday.selectedIndex + 1,
+            monthDay =
+                if (
+                    selectedRecurrence ==
+                    RecurrenceType.MONTHLY_DAY
+                )
+                    monthDay.value as Int
+                else
+                    null,
+            date =
+                if (
+                    selectedRecurrence ==
+                    RecurrenceType.SPECIFIC_DATE
+                )
+                    parsedDate?.toString()
+                else
+                    null,
+            label =
+                label.text.trim(),
+            preferScheduled =
+                prefer.isSelected,
+            active =
+                existing?.active ?: true
         )
     }
 
-    fun marker(parent: Component, state: AppState): PersonDayMarker? {
-        val employees = state.employees.filter { it.active }
-        if (employees.isEmpty()) return null
-        val employee = JComboBox(employees.toTypedArray()).apply { renderer = LabelListRenderer { (it as Employee).name } }
-        val type = JComboBox(PersonMarkerType.entries.toTypedArray()).apply {
-            renderer = LabelListRenderer { markerLabel(it as PersonMarkerType) }
+    fun marker(
+        parent: Component,
+        state: AppState,
+        existing: PersonDayMarker? = null
+    ): PersonDayMarker? {
+        val employees =
+            state.employees.filter {
+                it.active ||
+                    it.id == existing?.employeeId
+            }
+
+        if (employees.isEmpty()) {
+            return null
         }
-        val date = JTextField(LocalDate.now().toString(), 12)
-        val note = JTextField("", 22)
+
+        val employee =
+            JComboBox(
+                employees.toTypedArray()
+            ).apply {
+                selectedItem =
+                    employees.firstOrNull {
+                        it.id ==
+                            existing?.employeeId
+                    } ?: employees.first()
+
+                renderer =
+                    LabelListRenderer {
+                        (it as Employee).name
+                    }
+            }
+
+        val type =
+            JComboBox(
+                PersonMarkerType.entries
+                    .toTypedArray()
+            ).apply {
+                selectedItem =
+                    existing?.type
+                        ?: PersonMarkerType.PRESENT
+
+                renderer =
+                    LabelListRenderer {
+                        markerLabel(
+                            it as PersonMarkerType
+                        )
+                    }
+            }
+
+        val date =
+            JTextField(
+                existing?.date
+                    ?: LocalDate.now().toString(),
+                12
+            )
+
+        val note =
+            JTextField(
+                existing?.note.orEmpty(),
+                22
+            )
+
         val form = formPanel(
             "Medewerker" to employee,
             "Type" to type,
             "Datum" to date,
             "Opmerking" to note
         )
-        if (!confirm(parent, "Aanwezigheid of markering", form)) return null
-        val parsed = runCatching { LocalDate.parse(date.text.trim()) }.getOrNull()
-        if (parsed == null) {
-            error(parent, "Controleer de datum")
+
+        if (
+            !confirm(
+                parent,
+                if (existing == null)
+                    "Aanwezigheid of markering"
+                else
+                    "Markering wijzigen",
+                form
+            )
+        ) {
             return null
         }
+
+        val parsed =
+            runCatching {
+                LocalDate.parse(
+                    date.text.trim()
+                )
+            }.getOrNull()
+
+        if (parsed == null) {
+            error(
+                parent,
+                "Controleer de datum."
+            )
+            return null
+        }
+
         return PersonDayMarker(
-            employeeId = (employee.selectedItem as Employee).id,
-            date = parsed.toString(),
-            type = type.selectedItem as PersonMarkerType,
-            note = note.text.trim()
+            id =
+                existing?.id
+                    ?: UUID.randomUUID()
+                        .toString(),
+            employeeId =
+                (employee.selectedItem
+                    as Employee).id,
+            date =
+                parsed.toString(),
+            type =
+                type.selectedItem
+                    as PersonMarkerType,
+            note =
+                note.text.trim()
         )
     }
 

@@ -49,6 +49,28 @@ checks = {
     'desktopApp/build.gradle.kts': ['version = "0.11.2"'],
 }
 
+
+checks.update({
+    'desktopApp/src/main/kotlin/nl/roosterandroid/desktop/DesktopStorage.kt': [
+        'lastLoadNotice',
+        'newestValidBackup()',
+        'roosterplanner-corrupt-',
+    ],
+    'desktopApp/src/main/kotlin/nl/roosterandroid/desktop/DesktopDialogs.kt': [
+        'existing: Availability? = null',
+        'existing: ResponsibilityRule? = null',
+        'existing: PersonDayMarker? = null',
+        'De contracturen passen niet binnen',
+    ],
+    'desktopApp/src/main/kotlin/nl/roosterandroid/desktop/RulesPanel.kt': [
+        'strictDailyRestHours = strictRest.value as Int',
+        'busyWeekdays = busyWeekdayChecks',
+    ],
+    'desktopApp/src/test/kotlin/nl/roosterandroid/desktop/V0111RegressionTest.kt': [
+        'corruptedPrimaryStateRestoresBackup',
+    ],
+})
+
 errors = []
 for rel, needles in checks.items():
     p = root / rel

@@ -137,22 +137,78 @@ internal class OperationsPanel(private val controller: DesktopController) : JPan
     private fun taskTab(): JPanel = tabPanel(
         taskTable,
         primaryButton("Taak toevoegen") {
-            DesktopDialogs.responsibility(this, controller.state)?.let(controller::upsertResponsibility)
+            DesktopDialogs.responsibility(
+                this,
+                controller.state
+            )?.let(
+                controller::upsertResponsibility
+            )
+        },
+        secondaryButton("Wijzigen") {
+            val item =
+                currentTasks().getOrNull(
+                    selectedModelRow(
+                        taskTable
+                    ) ?: return@secondaryButton
+                ) ?: return@secondaryButton
+
+            DesktopDialogs.responsibility(
+                this,
+                controller.state,
+                item
+            )?.let(
+                controller::upsertResponsibility
+            )
         },
         secondaryButton("Verwijderen") {
-            currentTasks().getOrNull(selectedModelRow(taskTable) ?: return@secondaryButton)
-                ?.let { controller.removeResponsibility(it.id) }
+            currentTasks().getOrNull(
+                selectedModelRow(
+                    taskTable
+                ) ?: return@secondaryButton
+            )?.let {
+                controller.removeResponsibility(
+                    it.id
+                )
+            }
         }
     )
 
     private fun markerTab(): JPanel = tabPanel(
         markerTable,
         primaryButton("Markering toevoegen") {
-            DesktopDialogs.marker(this, controller.state)?.let(controller::upsertPersonMarker)
+            DesktopDialogs.marker(
+                this,
+                controller.state
+            )?.let(
+                controller::upsertPersonMarker
+            )
+        },
+        secondaryButton("Wijzigen") {
+            val item =
+                currentMarkers().getOrNull(
+                    selectedModelRow(
+                        markerTable
+                    ) ?: return@secondaryButton
+                ) ?: return@secondaryButton
+
+            DesktopDialogs.marker(
+                this,
+                controller.state,
+                item
+            )?.let(
+                controller::upsertPersonMarker
+            )
         },
         secondaryButton("Verwijderen") {
-            currentMarkers().getOrNull(selectedModelRow(markerTable) ?: return@secondaryButton)
-                ?.let { controller.removePersonMarker(it.id) }
+            currentMarkers().getOrNull(
+                selectedModelRow(
+                    markerTable
+                ) ?: return@secondaryButton
+            )?.let {
+                controller.removePersonMarker(
+                    it.id
+                )
+            }
         }
     )
 

@@ -56,7 +56,7 @@ class DesktopController(private val storage: DesktopStorage) {
         private set
     var plannerWarnings: List<String> = emptyList()
         private set
-    var status: String = "Klaar"
+    var status: String = storage.lastLoadNotice ?: "Klaar"
         private set
 
     val state: AppState

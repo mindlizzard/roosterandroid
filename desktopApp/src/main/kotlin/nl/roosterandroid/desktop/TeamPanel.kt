@@ -35,7 +35,7 @@ internal class TeamPanel(private val controller: DesktopController) : JPanel(Bor
             add(panelTitle("Team en beschikbaarheid"))
             add(primaryButton("Medewerker toevoegen") { addEmployee() })
             add(secondaryButton("Wijzigen") { editEmployee() })
-            add(secondaryButton("Verwijderen") { removeEmployee() })
+            add(secondaryButton("Uit dienst / verwijderen") { removeEmployee() })
         }
         add(toolbar, BorderLayout.NORTH)
 
@@ -64,6 +64,7 @@ internal class TeamPanel(private val controller: DesktopController) : JPanel(Bor
             add(primaryButton("Weekdag instellen") { editWeeklyAvailability() })
             add(secondaryButton("Weekregel resetten") { resetWeeklyAvailability() })
             add(secondaryButton("Datumuitzondering") { addDateException() })
+            add(secondaryButton("Uitzondering wijzigen") { editDateException() })
             add(secondaryButton("Uitzondering verwijderen") { removeDateException() })
         }
         val right = JPanel(BorderLayout(0, 8)).apply {
@@ -165,15 +166,40 @@ internal class TeamPanel(private val controller: DesktopController) : JPanel(Bor
     }
 
     private fun removeEmployee() {
-        val employee = selectedEmployee() ?: return
-        if (JOptionPane.showConfirmDialog(
+        val employee =
+            selectedEmployee() ?: return
+
+        val referenced =
+            (controller.state.assignments +
+                controller.state.assignmentHistory)
+                .any {
+                    it.employeeId ==
+                        employee.id
+                }
+
+        val message =
+            if (referenced) {
+                "${employee.name} heeft roosterhistorie.\n" +
+                    "De medewerker wordt daarom op INACTIEF gezet.\n" +
+                    "Oude roosters en uren blijven behouden."
+            } else {
+                "${employee.name} verwijderen?\n" +
+                    "Er is geen roosterhistorie gekoppeld."
+            }
+
+        if (
+            JOptionPane.showConfirmDialog(
                 this,
-                "${employee.name} en gekoppelde roosterdata verwijderen?",
-                "Medewerker verwijderen",
+                message,
+                "Medewerker uit dienst / verwijderen",
                 JOptionPane.YES_NO_OPTION,
                 JOptionPane.WARNING_MESSAGE
             ) == JOptionPane.YES_OPTION
-        ) controller.removeEmployee(employee.id)
+        ) {
+            controller.removeEmployee(
+                employee.id
+            )
+        }
     }
 
     private fun editWeeklyAvailability() {
@@ -196,6 +222,36 @@ internal class TeamPanel(private val controller: DesktopController) : JPanel(Bor
     private fun addDateException() {
         val employee = selectedEmployee() ?: return
         DesktopDialogs.dateAvailability(this, controller.state, employee)?.let(controller::upsertAvailability)
+    }
+
+    private fun editDateException() {
+        val employee =
+            selectedEmployee() ?: return
+
+        val row =
+            selectedModelRow(
+                exceptionTable
+            ) ?: return
+
+        val rules =
+            controller.state.availability
+                .filter {
+                    it.employeeId ==
+                        employee.id
+                }
+                .sortedBy { it.date }
+
+        val rule =
+            rules.getOrNull(row) ?: return
+
+        DesktopDialogs.dateAvailability(
+            this,
+            controller.state,
+            employee,
+            rule
+        )?.let(
+            controller::upsertAvailability
+        )
     }
 
     private fun removeDateException() {

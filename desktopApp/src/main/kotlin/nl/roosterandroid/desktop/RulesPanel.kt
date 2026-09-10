@@ -44,6 +44,16 @@ internal class RulesPanel(private val controller: DesktopController) : JPanel(Bo
     private val minOffBlocks = JSpinner(SpinnerNumberModel(1, 0, 4, 1))
     private val preferredOffBlocks = JSpinner(SpinnerNumberModel(2, 0, 6, 1))
     private val monthEndManagers = JSpinner(SpinnerNumberModel(2, 1, 6, 1))
+    private val strictRest = JSpinner(SpinnerNumberModel(11, 11, 24, 1))
+    private val busyWeekdayChecks = linkedMapOf(
+        1 to JCheckBox("Ma"),
+        2 to JCheckBox("Di"),
+        3 to JCheckBox("Wo"),
+        4 to JCheckBox("Do"),
+        5 to JCheckBox("Vr"),
+        6 to JCheckBox("Za"),
+        7 to JCheckBox("Zo")
+    )
     private val templateModel = tableModel("Naam", "Type", "Tijd", "Dagen", "Bron")
     private val templateTable = configuredTable(templateModel)
     private val hoursModel = tableModel("Dag", "Open / start", "Dicht / einde", "Gesloten")
@@ -82,6 +92,10 @@ internal class RulesPanel(private val controller: DesktopController) : JPanel(Bo
         minOffBlocks.value = settings.minimumTwoDayOffBlocks
         preferredOffBlocks.value = settings.preferredTwoDayOffBlocks
         monthEndManagers.value = settings.monthEndCloseManagers
+        strictRest.value = settings.strictDailyRestHours.coerceIn(11, 24)
+        busyWeekdayChecks.forEach { (weekday, check) ->
+            check.isSelected = weekday in settings.busyWeekdays
+        }
 
         templateModel.rowCount = 0
         controller.state.shiftTemplates.filterNot { it.archived }.forEach { template ->
@@ -128,6 +142,8 @@ internal class RulesPanel(private val controller: DesktopController) : JPanel(Bo
                 add(Box.createVerticalStrut(5))
             }
             add(Box.createVerticalStrut(8))
+            add(busyDaysRow())
+            add(spinnerRow("Minimale dagelijkse rust (uur)", strictRest))
             add(spinnerRow("Maximum opeenvolgende werkdagen", maxConsecutive))
             add(spinnerRow("Minimaal aantal blokken van 2 vrije dagen", minOffBlocks))
             add(spinnerRow("Gewenst aantal blokken van 2 vrije dagen", preferredOffBlocks))
@@ -241,10 +257,14 @@ internal class RulesPanel(private val controller: DesktopController) : JPanel(Bo
             requireSetupDaily = requireSetup.isSelected,
             requireCloseDaily = requireClose.isSelected,
             requireMiddleOnBusyDays = requireMiddle.isSelected,
+            busyWeekdays = busyWeekdayChecks
+                .filterValues { it.isSelected }
+                .keys,
             traineeMustHaveExperiencedManager = traineeCoverage.isSelected,
             minimizeBorrowedManagers = minimizeBorrowed.isSelected,
             preferTwoConsecutiveDaysOff = preferTwoDays.isSelected,
             atwEnabled = atw.isSelected,
+            strictDailyRestHours = strictRest.value as Int,
             allowOneReducedDailyRestPer7Days = reducedRest.isSelected,
             treatMaxConsecutiveDaysAsHardRule = hardConsecutive.isSelected,
             warnMinimumFreeSundays = warnSundays.isSelected,
@@ -271,6 +291,35 @@ internal class RulesPanel(private val controller: DesktopController) : JPanel(Bo
     }
 
     private fun currentHours(): List<OperatingHours> = controller.state.operatingHours.sortedBy { it.weekday }
+
+    private fun busyDaysRow(): JPanel =
+        JPanel(
+            FlowLayout(
+                FlowLayout.LEFT,
+                8,
+                2
+            )
+        ).apply {
+            alignmentX = LEFT_ALIGNMENT
+            maximumSize =
+                Dimension(
+                    Int.MAX_VALUE,
+                    40
+                )
+
+            add(
+                JLabel("Drukke dagen").apply {
+                    preferredSize =
+                        Dimension(
+                            330,
+                            28
+                        )
+                }
+            )
+
+            busyWeekdayChecks.values
+                .forEach(::add)
+        }
 
     private fun spinnerRow(label: String, spinner: JSpinner): JPanel = JPanel(FlowLayout(FlowLayout.LEFT, 8, 2)).apply {
         alignmentX = LEFT_ALIGNMENT
