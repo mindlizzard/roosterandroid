@@ -182,24 +182,62 @@ internal object ManualScheduleEditor {
         LocalTime.parse(raw.trim(), DateTimeFormatter.ofPattern("H:mm")).format(DateTimeFormatter.ofPattern("HH:mm"))
     }.getOrNull()
 
-    private fun specificOrWeeklyRule(state: AppState, employee: Employee, date: LocalDate): Pair<String?, String?>? {
-        val specific = state.availability.lastOrNull { it.employeeId == employee.id && it.date == date.toString() }
-        val weekly = state.weeklyAvailability.lastOrNull { it.employeeId == employee.id && it.weekday == date.dayOfWeek.value }
-        val rule = specific ?: weekly ?: return null
-        return rule.earliestStart to rule.latestEnd
+    private fun specificOrWeeklyRule(
+        state: AppState,
+        employee: Employee,
+        date: LocalDate
+    ): Pair<String?, String?>? {
+        val specific = state.availability.lastOrNull {
+            it.employeeId == employee.id && it.date == date.toString()
+        }
+        if (specific != null) {
+            return specific.earliestStart to specific.latestEnd
+        }
+
+        val weekly = state.weeklyAvailability.lastOrNull {
+            it.employeeId == employee.id &&
+                it.weekday == date.dayOfWeek.value
+        }
+        if (weekly != null) {
+            return weekly.earliestStart to weekly.latestEnd
+        }
+
+        return null
     }
 
-    private fun availabilityText(state: AppState, employee: Employee, date: LocalDate): String {
-        val specific = state.availability.lastOrNull { it.employeeId == employee.id && it.date == date.toString() }
-        val weekly = state.weeklyAvailability.lastOrNull { it.employeeId == employee.id && it.weekday == date.dayOfWeek.value }
-        val rule = specific ?: weekly
-        if (rule?.available == false) return "niet beschikbaar"
-        val absence = state.absences.firstOrNull {
-            it.employeeId == employee.id && it.status == AbsenceStatus.APPROVED && it.includes(date)
+    private fun availabilityText(
+        state: AppState,
+        employee: Employee,
+        date: LocalDate
+    ): String {
+        val specific = state.availability.lastOrNull {
+            it.employeeId == employee.id && it.date == date.toString()
         }
-        if (absence != null) return "afwezig (${absence.type.name.lowercase()})"
-        val from = rule?.earliestStart
-        val until = rule?.latestEnd
+        val weekly = state.weeklyAvailability.lastOrNull {
+            it.employeeId == employee.id &&
+                it.weekday == date.dayOfWeek.value
+        }
+
+        val available =
+            specific?.available ?: weekly?.available ?: true
+
+        if (!available) return "niet beschikbaar"
+
+        val absence = state.absences.firstOrNull {
+            it.employeeId == employee.id &&
+                it.status == AbsenceStatus.APPROVED &&
+                it.includes(date)
+        }
+
+        if (absence != null) {
+            return "afwezig (${absence.type.name.lowercase()})"
+        }
+
+        val from =
+            specific?.earliestStart ?: weekly?.earliestStart
+        val until =
+            specific?.latestEnd ?: weekly?.latestEnd
+
         return when {
             from != null && until != null -> "$from-$until"
             from != null -> "vanaf $from"
@@ -208,33 +246,92 @@ internal object ManualScheduleEditor {
         }
     }
 
-    private fun fitsAvailability(state: AppState, employee: Employee, date: LocalDate, template: ShiftTemplate): Boolean {
+    private fun fitsAvailability(
+        state: AppState,
+        employee: Employee,
+        date: LocalDate,
+        template: ShiftTemplate
+    ): Boolean {
         if (state.absences.any {
-                it.employeeId == employee.id && it.status == AbsenceStatus.APPROVED && it.includes(date)
+                it.employeeId == employee.id &&
+                    it.status == AbsenceStatus.APPROVED &&
+                    it.includes(date)
             }
         ) return false
-        val specific = state.availability.lastOrNull { it.employeeId == employee.id && it.date == date.toString() }
-        val weekly = state.weeklyAvailability.lastOrNull { it.employeeId == employee.id && it.weekday == date.dayOfWeek.value }
-        val rule = specific ?: weekly
-        if (rule?.available == false) return false
-        if (rule?.fixedShiftKind != null && rule.fixedShiftKind != template.kind) return false
+
+        val specific = state.availability.lastOrNull {
+            it.employeeId == employee.id &&
+                it.date == date.toString()
+        }
+
+        val weekly = state.weeklyAvailability.lastOrNull {
+            it.employeeId == employee.id &&
+                it.weekday == date.dayOfWeek.value
+        }
+
+        val available =
+            specific?.available ?: weekly?.available ?: true
+
+        if (!available) return false
+
+        val fixedShiftKind =
+            specific?.fixedShiftKind ?: weekly?.fixedShiftKind
+
+        if (
+            fixedShiftKind != null &&
+            fixedShiftKind != template.kind
+        ) return false
 
         val anchor = LocalDate.of(2000, 1, 3)
-        val shiftStart = anchor.atTime(template.startTime())
-        var shiftEnd = anchor.atTime(template.endTime())
-        if (!shiftEnd.isAfter(shiftStart)) shiftEnd = shiftEnd.plusDays(1)
 
-        val earliest = rule?.earliestStart?.let { runCatching { LocalTime.parse(it) }.getOrNull() }
-        val latest = rule?.latestEnd?.let { runCatching { LocalTime.parse(it) }.getOrNull() }
+        val shiftStart =
+            anchor.atTime(template.startTime())
+
+        var shiftEnd =
+            anchor.atTime(template.endTime())
+
+        if (!shiftEnd.isAfter(shiftStart)) {
+            shiftEnd = shiftEnd.plusDays(1)
+        }
+
+        val earliest =
+            (specific?.earliestStart ?: weekly?.earliestStart)
+                ?.let {
+                    runCatching {
+                        LocalTime.parse(it)
+                    }.getOrNull()
+                }
+
+        val latest =
+            (specific?.latestEnd ?: weekly?.latestEnd)
+                ?.let {
+                    runCatching {
+                        LocalTime.parse(it)
+                    }.getOrNull()
+                }
+
         if (earliest != null) {
             val minStart = anchor.atTime(earliest)
-            if (shiftStart.isBefore(minStart)) return false
+            if (shiftStart.isBefore(minStart)) {
+                return false
+            }
         }
+
         if (latest != null) {
             var maxEnd = anchor.atTime(latest)
-            if (earliest != null && !maxEnd.isAfter(anchor.atTime(earliest))) maxEnd = maxEnd.plusDays(1)
-            if (shiftEnd.isAfter(maxEnd)) return false
+
+            if (
+                earliest != null &&
+                !maxEnd.isAfter(anchor.atTime(earliest))
+            ) {
+                maxEnd = maxEnd.plusDays(1)
+            }
+
+            if (shiftEnd.isAfter(maxEnd)) {
+                return false
+            }
         }
+
         return true
     }
 }
