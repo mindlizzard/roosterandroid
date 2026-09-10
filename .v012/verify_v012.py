@@ -46,7 +46,7 @@ checks = {
         'archivedAutoTemplateDoesNotComeBack',
         'editingReferencedTemplatePreservesOldShiftAndCreatesReplacement',
     ],
-    'desktopApp/build.gradle.kts': ['version = "0.12.0-alpha7"'],
+    'desktopApp/build.gradle.kts': ['version = "0.12.0-alpha8"'],
 }
 
 
@@ -89,8 +89,8 @@ checks.update({
         '.fromAppState(oldState)',
     ],
     'app/build.gradle.kts': [
-        'versionCode = 18',
-        'versionName = "0.12.0-alpha7"',
+        'versionCode = 19',
+        'versionName = "0.12.0-alpha8"',
     ],
     'desktopApp/src/main/kotlin/nl/roosterandroid/desktop/DesktopController.kt': [
         'borrowEmployeeFromLocation(',
@@ -231,6 +231,28 @@ checks.update({
     ],
     'app/src/test/java/nl/roosterandroid/app/WorkspaceModelTest.kt': [
         'borrowedCopyKeepsSourceAndTraineeIsExcluded',
+    ],
+})
+
+
+checks.update({
+    'app/src/main/java/nl/roosterandroid/app/ManualOverridePolicy.kt': [
+        'fun AppState.manualOperationalWarnings(',
+        'template.enabledWeekdays',
+        'warnings.distinct()',
+    ],
+    'app/src/main/java/nl/roosterandroid/app/MainActivity.kt': [
+        'allowOperationalOverride: Boolean = false',
+        '"manual-override"',
+        'state.manualOperationalWarnings(',
+        'Text("Handmatige override")',
+        'Text("Toch plaatsen")',
+        'overrideWarnings',
+        'dienst valt buiten de restauranttijden',
+    ],
+    'desktopApp/src/test/kotlin/nl/roosterandroid/desktop/SharedManualOverridePolicyTest.kt': [
+        'specificDateRuleOverridesWeeklyRuleCompletely',
+        'operationalConflictsAreWarnings',
     ],
 })
 

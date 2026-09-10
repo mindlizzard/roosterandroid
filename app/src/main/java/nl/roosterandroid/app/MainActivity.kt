@@ -429,37 +429,123 @@ class AppController(private val storage: ScheduleStorage) {
         )
     }
 
-    fun setManualAssignment(employeeId: String, date: String, templateId: String?) {
-        val without = state.assignments.filterNot {
-            it.employeeId == employeeId && it.date == date
-        }
-        if (templateId == null) {
-            commit(state.copy(assignments = without), "Dienst op vrij gezet")
-            return
-        }
-
-        manualBlockReason(employeeId, date, templateId)?.let {
-            status = "Niet opgeslagen: $it"
-            return
-        }
-
-        val candidate = Assignment(
-            employeeId = employeeId,
-            date = date,
-            shiftTemplateId = templateId,
-            source = "manual"
-        )
-        val proposed = state.copy(assignments = without + candidate)
-        val errors = validator.validate(proposed).filter {
-            it.severity == AtwValidator.Severity.ERROR &&
+    fun setManualAssignment(
+        employeeId: String,
+        date: String,
+        templateId: String?,
+        allowOperationalOverride: Boolean = false
+    ): Boolean {
+        val without =
+            state.assignments.filterNot {
                 it.employeeId == employeeId &&
-                (it.date?.toString() == date || it.date == null)
+                    it.date == date
+            }
+
+        if (templateId == null) {
+            commit(
+                state.copy(
+                    assignments = without
+                ),
+                "Dienst op vrij gezet"
+            )
+            return true
         }
-        if (errors.isNotEmpty()) {
-            status = "Niet opgeslagen: ${errors.first().message}"
-            return
+
+        hardManualBlockReason(
+            employeeId,
+            date,
+            templateId
+        )?.let {
+            status =
+                "Niet opgeslagen: $it"
+            return false
         }
-        commit(proposed, "Handmatige dienst opgeslagen")
+
+        val warnings =
+            manualOverrideWarnings(
+                employeeId,
+                date,
+                templateId
+            )
+
+        if (
+            warnings.isNotEmpty() &&
+            !allowOperationalOverride
+        ) {
+            status =
+                "Bevestiging nodig: " +
+                    warnings.joinToString(" • ")
+            return false
+        }
+
+        val candidate =
+            Assignment(
+                employeeId = employeeId,
+                date = date,
+                shiftTemplateId = templateId,
+                source =
+                    if (
+                        allowOperationalOverride &&
+                        warnings.isNotEmpty()
+                    ) {
+                        "manual-override"
+                    } else {
+                        "manual"
+                    }
+            )
+
+        val proposed =
+            state.copy(
+                assignments =
+                    without + candidate
+            )
+
+        val baselineKeys =
+            validator.validate(state)
+                .filter {
+                    it.severity ==
+                        AtwValidator.Severity.ERROR &&
+                        it.employeeId ==
+                            employeeId
+                }
+                .map {
+                    "${it.employeeId}|${it.date}|${it.rule}|${it.message}"
+                }
+                .toSet()
+
+        val newErrors =
+            validator.validate(proposed)
+                .filter {
+                    it.severity ==
+                        AtwValidator.Severity.ERROR &&
+                        it.employeeId ==
+                            employeeId
+                }
+                .filter {
+                    "${it.employeeId}|${it.date}|${it.rule}|${it.message}" !in
+                        baselineKeys
+                }
+
+        if (newErrors.isNotEmpty()) {
+            status =
+                "Niet opgeslagen: " +
+                    newErrors.first().message
+            return false
+        }
+
+        commit(
+            proposed,
+            if (
+                allowOperationalOverride &&
+                warnings.isNotEmpty()
+            ) {
+                "Handmatige override opgeslagen"
+            } else {
+                "Handmatige dienst opgeslagen"
+            }
+        )
+
+        return true
     }
 
     fun swapAssignments(date: String, firstEmployeeId: String, secondEmployeeId: String) {
@@ -509,39 +595,114 @@ class AppController(private val storage: ScheduleStorage) {
         commit(proposed, "Diensten geruild")
     }
 
-    private fun manualBlockReason(employeeId: String, date: String, templateId: String): String? {
-        val employee = state.employees.firstOrNull { it.id == employeeId } ?: return "manager niet gevonden"
-        val template = state.shiftTemplates.firstOrNull { it.id == templateId } ?: return "dienst niet gevonden"
-        val d = runCatching { LocalDate.parse(date) }.getOrNull() ?: return "ongeldige datum"
+    private fun hardManualBlockReason(
+        employeeId: String,
+        date: String,
+        templateId: String
+    ): String? {
+        val employee =
+            state.employees.firstOrNull {
+                it.id == employeeId
+            }
+                ?: return "manager niet gevonden"
+
+        if (!employee.active) {
+            return "${employee.name} is niet actief"
+        }
+
+        val template =
+            state.shiftTemplates.firstOrNull {
+                it.id == templateId &&
+                    !it.archived
+            }
+                ?: return "dienst niet gevonden"
+
+        val parsedDate =
+            runCatching {
+                LocalDate.parse(date)
+            }.getOrNull()
+                ?: return "ongeldige datum"
+
+        if (!employee.canWork(template.kind)) {
+            return (
+                "${employee.name} mag " +
+                    shiftKindLabel(template.kind) +
+                    " niet werken"
+            )
+        }
+
+        if (
+            !state.allowsShiftOn(
+                parsedDate,
+                template
+            )
+        ) {
+            val hours =
+                state.operatingHours.lastOrNull {
+                    it.weekday ==
+                        parsedDate.dayOfWeek.value
+                }
+
+            return if (hours?.closed == true) {
+                "de locatie is op deze weekdag gesloten"
+            } else {
+                "dienst valt buiten de restauranttijden"
+            }
+        }
+
         state.absences.firstOrNull {
             it.employeeId == employeeId &&
-                it.status == AbsenceStatus.APPROVED &&
-                it.includes(d)
+                it.status ==
+                    AbsenceStatus.APPROVED &&
+                it.includes(parsedDate)
         }?.let {
-            return "${employee.name} heeft ${it.type.name.lowercase()}"
+            return (
+                "${employee.name} is afwezig (" +
+                    it.type.name.lowercase() +
+                    ")"
+            )
         }
-        if (!employee.canWork(template.kind)) return "${employee.name} mag ${shiftKindLabel(template.kind)} niet werken"
-        val specific = state.availability.lastOrNull { it.employeeId == employeeId && it.date == date }
-        val weekly = state.weeklyAvailability.lastOrNull { it.employeeId == employeeId && it.weekday == d.dayOfWeek.value }
-        val available = if (specific != null) specific.available else weekly?.available ?: true
-        if (!available) return "${employee.name} is niet beschikbaar"
-        val fixedKind = if (specific != null) specific.fixedShiftKind else weekly?.fixedShiftKind
-        if (fixedKind != null && fixedKind != template.kind) return "${employee.name} heeft die dag een andere vaste dienst"
-        val earliestText = if (specific != null) specific.earliestStart else weekly?.earliestStart
-        val latestText = if (specific != null) specific.latestEnd else weekly?.latestEnd
-        val earliest = earliestText?.let { runCatching { java.time.LocalTime.parse(it) }.getOrNull() }
-        val latest = latestText?.let { runCatching { java.time.LocalTime.parse(it) }.getOrNull() }
-        if (earliest != null && template.startTime().isBefore(earliest)) return "dienst begint vóór beschikbaarheid van ${employee.name}"
-        if (latest != null) {
-            val startDt = d.atTime(template.startTime())
-            var endDt = d.atTime(template.endTime())
-            if (!endDt.isAfter(startDt)) endDt = endDt.plusDays(1)
-            var latestDt = d.atTime(latest)
-            if (!latestDt.isAfter(startDt)) latestDt = latestDt.plusDays(1)
-            if (endDt.isAfter(latestDt)) return "dienst eindigt na beschikbaarheid van ${employee.name}"
-        }
+
         return null
     }
+
+    fun manualOverrideWarnings(
+        employeeId: String,
+        date: String,
+        templateId: String
+    ): List<String> {
+        if (
+            hardManualBlockReason(
+                employeeId,
+                date,
+                templateId
+            ) != null
+        ) {
+            return emptyList()
+        }
+
+        return state.manualOperationalWarnings(
+            employeeId,
+            date,
+            templateId
+        )
+    }
+
+    private fun manualBlockReason(
+        employeeId: String,
+        date: String,
+        templateId: String
+    ): String? =
+        hardManualBlockReason(
+            employeeId,
+            date,
+            templateId
+        )
+            ?: manualOverrideWarnings(
+                employeeId,
+                date,
+                templateId
+            ).firstOrNull()
 
     fun upsertDayDemand(demand: DayDemand) {
         val updated = state.dayDemands.filterNot { it.date == demand.date } + demand
@@ -2289,6 +2450,19 @@ private fun ScheduleScreen(controller: AppController, onPrintPdf: () -> Unit) {
     var editEmployeeId by remember { mutableStateOf<String?>(null) }
     var editDate by remember { mutableStateOf<String?>(null) }
 
+    var overrideEmployeeId by remember {
+        mutableStateOf<String?>(null)
+    }
+    var overrideDate by remember {
+        mutableStateOf<String?>(null)
+    }
+    var overrideTemplateId by remember {
+        mutableStateOf<String?>(null)
+    }
+    var overrideWarnings by remember {
+        mutableStateOf(emptyList<String>())
+    }
+
     noteDate?.let { date ->
         AlertDialog(
             onDismissRequest = { noteDate = null },
@@ -2315,13 +2489,149 @@ private fun ScheduleScreen(controller: AppController, onPrintPdf: () -> Unit) {
         )
     }
 
+    val pendingEmployeeId =
+        overrideEmployeeId
+    val pendingDate =
+        overrideDate
+    val pendingTemplateId =
+        overrideTemplateId
+
+    if (
+        pendingEmployeeId != null &&
+        pendingDate != null &&
+        pendingTemplateId != null
+    ) {
+        val pendingEmployee =
+            controller.state.employees
+                .firstOrNull {
+                    it.id == pendingEmployeeId
+                }
+
+        val pendingTemplate =
+            controller.state.shiftTemplates
+                .firstOrNull {
+                    it.id == pendingTemplateId
+                }
+
+        if (
+            pendingEmployee != null &&
+            pendingTemplate != null
+        ) {
+            AlertDialog(
+                onDismissRequest = {
+                    editEmployeeId =
+                        pendingEmployeeId
+                    editDate =
+                        pendingDate
+
+                    overrideEmployeeId = null
+                    overrideDate = null
+                    overrideTemplateId = null
+                    overrideWarnings =
+                        emptyList()
+                },
+                title = {
+                    Text("Handmatige override")
+                },
+                text = {
+                    Column(
+                        verticalArrangement =
+                            Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            "⚠ Deze dienst wijkt af van " +
+                                "de ingestelde planning."
+                        )
+
+                        overrideWarnings.forEach {
+                            Text("• $it")
+                        }
+
+                        Text(
+                            pendingTemplate.name +
+                                "  " +
+                                pendingTemplate.start +
+                                "–" +
+                                pendingTemplate.end,
+                            fontWeight =
+                                FontWeight.Bold
+                        )
+
+                        Text(
+                            "Afwezigheid, rolbeperkingen " +
+                                "en nieuwe ATW-fouten " +
+                                "kunnen niet worden overschreven.",
+                            style =
+                                MaterialTheme
+                                    .typography
+                                    .bodySmall
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            val saved =
+                                controller
+                                    .setManualAssignment(
+                                        pendingEmployeeId,
+                                        pendingDate,
+                                        pendingTemplateId,
+                                        allowOperationalOverride =
+                                            true
+                                    )
+
+                            overrideEmployeeId = null
+                            overrideDate = null
+                            overrideTemplateId = null
+                            overrideWarnings =
+                                emptyList()
+
+                            if (saved) {
+                                editEmployeeId = null
+                                editDate = null
+                            } else {
+                                editEmployeeId =
+                                    pendingEmployeeId
+                                editDate =
+                                    pendingDate
+                            }
+                        }
+                    ) {
+                        Text("Toch plaatsen")
+                    }
+                },
+                dismissButton = {
+                    TextButton(
+                        onClick = {
+                            editEmployeeId =
+                                pendingEmployeeId
+                            editDate =
+                                pendingDate
+
+                            overrideEmployeeId = null
+                            overrideDate = null
+                            overrideTemplateId = null
+                            overrideWarnings =
+                                emptyList()
+                        }
+                    ) {
+                        Text("Annuleren")
+                    }
+                }
+            )
+        }
+    }
+
     if (editEmployeeId != null && editDate != null) {
         val employee = employees.firstOrNull { it.id == editEmployeeId }
         val date = runCatching { LocalDate.parse(editDate) }.getOrNull()
         if (employee != null && date != null) {
-            val options = controller.state.shiftTemplates.filter {
-                date.dayOfWeek.value in it.enabledWeekdays && employee.canWork(it.kind)
-            }
+            val options =
+                controller.state.shiftTemplates.filter {
+                    !it.archived &&
+                        employee.canWork(it.kind)
+                }
             AlertDialog(
                 onDismissRequest = {
                     editEmployeeId = null
@@ -2343,16 +2653,71 @@ private fun ScheduleScreen(controller: AppController, onPrintPdf: () -> Unit) {
                         }) { Text("Vrij") }
 
                         options.forEach { template ->
-                            TextButton(onClick = {
-                                controller.setManualAssignment(
-                                    employee.id,
-                                    date.toString(),
-                                    template.id
+                            val warnings =
+                                controller
+                                    .manualOverrideWarnings(
+                                        employee.id,
+                                        date.toString(),
+                                        template.id
+                                    )
+
+                            TextButton(
+                                onClick = {
+                                    val saved =
+                                        controller
+                                            .setManualAssignment(
+                                                employee.id,
+                                                date.toString(),
+                                                template.id
+                                            )
+
+                                    if (saved) {
+                                        editEmployeeId = null
+                                        editDate = null
+                                    } else {
+                                        val actualWarnings =
+                                            controller
+                                                .manualOverrideWarnings(
+                                                    employee.id,
+                                                    date.toString(),
+                                                    template.id
+                                                )
+
+                                        if (
+                                            actualWarnings
+                                                .isNotEmpty()
+                                        ) {
+                                            overrideEmployeeId =
+                                                employee.id
+                                            overrideDate =
+                                                date.toString()
+                                            overrideTemplateId =
+                                                template.id
+                                            overrideWarnings =
+                                                actualWarnings
+
+                                            editEmployeeId = null
+                                            editDate = null
+                                        }
+                                    }
+                                }
+                            ) {
+                                Text(
+                                    (
+                                        if (
+                                            warnings.isNotEmpty()
+                                        ) {
+                                            "⚠ "
+                                        } else {
+                                            ""
+                                        }
+                                    ) +
+                                        template.name +
+                                        "  " +
+                                        template.start +
+                                        "–" +
+                                        template.end
                                 )
-                                editEmployeeId = null
-                                editDate = null
-                            }) {
-                                Text("${template.name}  ${template.start}–${template.end}")
                             }
                         }
                     }
