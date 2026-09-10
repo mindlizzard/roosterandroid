@@ -46,7 +46,7 @@ checks = {
         'archivedAutoTemplateDoesNotComeBack',
         'editingReferencedTemplatePreservesOldShiftAndCreatesReplacement',
     ],
-    'desktopApp/build.gradle.kts': ['version = "0.12.0-alpha2"'],
+    'desktopApp/build.gradle.kts': ['version = "0.12.0-alpha3"'],
 }
 
 
@@ -84,8 +84,8 @@ checks.update({
         'atomicWrite(',
     ],
     'app/build.gradle.kts': [
-        'versionCode = 13',
-        'versionName = "0.12.0-alpha2"',
+        'versionCode = 14',
+        'versionName = "0.12.0-alpha3"',
     ],
     'desktopApp/src/main/kotlin/nl/roosterandroid/desktop/DesktopController.kt': [
         'borrowEmployeeFromLocation(',
@@ -114,6 +114,27 @@ checks.update({
     ],
     'desktopApp/src/test/kotlin/nl/roosterandroid/desktop/DesktopControllerTest.kt': [
         'manualEditAndAutoFixUseSingleUndoStep',
+    ],
+})
+
+
+checks.update({
+    'desktopApp/src/main/kotlin/nl/roosterandroid/desktop/DesktopController.kt': [
+        'allowOperationalOverride: Boolean = false',
+        'fun manualOverrideWarnings(',
+        'private fun hardManualBlockReason(',
+        '"manual-override"',
+        '"manual-custom-override"',
+    ],
+    'desktopApp/src/main/kotlin/nl/roosterandroid/desktop/ManualScheduleEditor.kt': [
+        '"⚠ "',
+        '"Handmatige override"',
+        '"Toch plaatsen?"',
+        'allowOperationalOverride =',
+    ],
+    'desktopApp/src/test/kotlin/nl/roosterandroid/desktop/DesktopControllerTest.kt': [
+        'operationalManualOverrideRequiresExplicitConfirmation',
+        'approvedAbsenceRemainsHardBlockDuringOverride',
     ],
 })
 

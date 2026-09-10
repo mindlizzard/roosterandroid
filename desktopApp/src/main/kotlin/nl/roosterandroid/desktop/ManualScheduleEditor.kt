@@ -115,22 +115,11 @@ internal object ManualScheduleEditor {
             "${it.name} ${it.start}-${it.end}"
         } ?: "Vrij"
 
-        val fitting = state.shiftTemplates
+        val selectable = state.shiftTemplates
             .asSequence()
             .filterNot { it.archived }
-            .filter {
-                date.dayOfWeek.value in it.enabledWeekdays
-            }
             .filter { employee.canWork(it.kind) }
             .filter { state.allowsShiftOn(date, it) }
-            .filter {
-                fitsAvailability(
-                    state,
-                    employee,
-                    date,
-                    it
-                )
-            }
             .sortedWith(
                 compareBy<ShiftTemplate>(
                     { it.start },
@@ -152,11 +141,28 @@ internal object ManualScheduleEditor {
 
             add(ActionChoice("Vrij / geen dienst"))
 
-            fitting.forEach {
+            selectable.forEach { template ->
+                val hasWarning =
+                    controller.manualOverrideWarnings(
+                        employee.id,
+                        date,
+                        template.id
+                    ).isNotEmpty()
+
                 add(
                     ActionChoice(
-                        "${it.name}   ${it.start}-${it.end}",
-                        template = it
+                        buildString {
+                            if (hasWarning) {
+                                append("⚠ ")
+                            }
+
+                            append(template.name)
+                            append("   ")
+                            append(template.start)
+                            append("-")
+                            append(template.end)
+                        },
+                        template = template
                     )
                 )
             }
@@ -174,7 +180,7 @@ internal object ManualScheduleEditor {
             "Beschikbaar: $availableText",
             "Huidige dienst: $currentText",
             " ",
-            "Kies de echte dienst. Beschikbaarheid blijft alleen het toegestane tijdvenster."
+            "Beschikbaarheid stuurt de automatische planning. Handmatig kun je bewust afwijken."
         )
 
         val selected = JOptionPane.showInputDialog(
@@ -205,12 +211,59 @@ internal object ManualScheduleEditor {
                     null
                 )
 
-            else ->
+            else -> {
+                val warnings =
+                    controller.manualOverrideWarnings(
+                        employee.id,
+                        date,
+                        selected.template.id
+                    )
+
+                val override =
+                    if (warnings.isEmpty()) {
+                        false
+                    } else {
+                        val text =
+                            buildString {
+                                append(
+                                    "Deze handmatige dienst wijkt af van de planning:\n\n"
+                                )
+
+                                warnings.forEach {
+                                    append("• ")
+                                    append(it)
+                                    append("\n")
+                                }
+
+                                append(
+                                    "\nDe dienst blijft wel ATW-gecontroleerd.\n\nToch plaatsen?"
+                                )
+                            }
+
+                        JOptionPane.showConfirmDialog(
+                            parent,
+                            text,
+                            "Handmatige override",
+                            JOptionPane.YES_NO_OPTION,
+                            JOptionPane.WARNING_MESSAGE
+                        ) == JOptionPane.YES_OPTION
+                    }
+
+                if (
+                    warnings.isNotEmpty() &&
+                    !override
+                ) {
+                    return
+                }
+
                 controller.setManualAssignment(
                     employee.id,
                     date,
-                    selected.template.id
+                    selected.template.id,
+                    allowOperationalOverride =
+                        override
                 )
+            }
         }
     }
 
@@ -257,16 +310,59 @@ internal object ManualScheduleEditor {
             JOptionPane.showMessageDialog(parent, "Deze dienst valt buiten de restauranttijden.", "Dienst niet toegestaan", JOptionPane.WARNING_MESSAGE)
             return
         }
-        if (!fitsAvailability(state, employee, date, probe)) {
+        val approvedAbsence =
+            state.absences.firstOrNull {
+                it.employeeId == employee.id &&
+                    it.status ==
+                        AbsenceStatus.APPROVED &&
+                    it.includes(date)
+            }
+
+        if (approvedAbsence != null) {
             JOptionPane.showMessageDialog(
                 parent,
-                "Deze dienst valt buiten de opgeslagen beschikbaarheid (${availabilityText(state, employee, date)}). Pas eerst de beschikbaarheid aan of kies een passende dienst.",
-                "Buiten beschikbaarheid",
+                "${employee.name} staat als afwezig geregistreerd (${approvedAbsence.type.name.lowercase()}).",
+                "Dienst niet toegestaan",
                 JOptionPane.WARNING_MESSAGE
             )
             return
         }
-        controller.setManualCustomAssignment(employee.id, date.toString(), startValue, endValue, selectedKind)
+
+        val outsideAvailability =
+            !fitsAvailability(
+                state,
+                employee,
+                date,
+                probe
+            )
+
+        if (outsideAvailability) {
+            val answer =
+                JOptionPane.showConfirmDialog(
+                    parent,
+                    "Deze dienst wijkt af van de opgeslagen beschikbaarheid " +
+                        "(${availabilityText(state, employee, date)}).\n\n" +
+                        "De dienst blijft ATW-gecontroleerd.\n\n" +
+                        "Toch plaatsen?",
+                    "Handmatige override",
+                    JOptionPane.YES_NO_OPTION,
+                    JOptionPane.WARNING_MESSAGE
+                )
+
+            if (answer != JOptionPane.YES_OPTION) {
+                return
+            }
+        }
+
+        controller.setManualCustomAssignment(
+            employee.id,
+            date.toString(),
+            startValue,
+            endValue,
+            selectedKind,
+            allowOperationalOverride =
+                outsideAvailability
+        )
     }
 
     private fun normalizeTime(raw: String): String? = runCatching {

@@ -1,7 +1,10 @@
 package nl.roosterandroid.desktop
 
 import nl.roosterandroid.app.AppState
+import nl.roosterandroid.app.Absence
+import nl.roosterandroid.app.AbsenceType
 import nl.roosterandroid.app.Assignment
+import nl.roosterandroid.app.Availability
 import nl.roosterandroid.app.Employee
 import nl.roosterandroid.app.PlannerSettings
 import nl.roosterandroid.app.ShiftKind
@@ -197,6 +200,142 @@ class DesktopControllerTest {
 
         assertFalse(controller.canUndo)
         assertTrue(controller.canRedo)
+    }
+
+
+    @Test
+    fun operationalManualOverrideRequiresExplicitConfirmation() {
+        val directory =
+            Files.createTempDirectory(
+                "roosterplanner-override-"
+            )
+
+        val employee = Employee(
+            name = "Override test",
+            contractedDaysPerWeek = 0,
+            contractedHoursPerWeek = 0.0,
+            maxShiftsPerWeek = 7
+        )
+
+        val day = ShiftTemplate(
+            "day",
+            "Dag",
+            ShiftKind.DAY,
+            "09:00",
+            "17:00"
+        )
+
+        val state = AppState(
+            year = 2026,
+            month = 8,
+            employees = listOf(employee),
+            shiftTemplates = listOf(day),
+            availability = listOf(
+                Availability(
+                    employeeId = employee.id,
+                    date = "2026-08-03",
+                    available = false
+                )
+            ),
+            settings = quietSettings()
+        )
+
+        val storage =
+            DesktopStorage(directory)
+
+        storage.save(
+            DesktopWorkspace.fromAppState(state)
+        )
+
+        val controller =
+            DesktopController(storage)
+
+        controller.setManualAssignment(
+            employee.id,
+            LocalDate.parse("2026-08-03"),
+            day.id
+        )
+
+        assertTrue(
+            controller.state.assignments.isEmpty()
+        )
+
+        controller.setManualAssignment(
+            employee.id,
+            LocalDate.parse("2026-08-03"),
+            day.id,
+            allowOperationalOverride = true
+        )
+
+        assertEquals(
+            1,
+            controller.state.assignments.size
+        )
+
+        assertEquals(
+            "manual-override",
+            controller.state.assignments.single().source
+        )
+    }
+
+    @Test
+    fun approvedAbsenceRemainsHardBlockDuringOverride() {
+        val directory =
+            Files.createTempDirectory(
+                "roosterplanner-hard-block-"
+            )
+
+        val employee = Employee(
+            name = "Afwezig",
+            contractedDaysPerWeek = 0,
+            contractedHoursPerWeek = 0.0,
+            maxShiftsPerWeek = 7
+        )
+
+        val day = ShiftTemplate(
+            "day",
+            "Dag",
+            ShiftKind.DAY,
+            "09:00",
+            "17:00"
+        )
+
+        val state = AppState(
+            year = 2026,
+            month = 8,
+            employees = listOf(employee),
+            shiftTemplates = listOf(day),
+            absences = listOf(
+                Absence(
+                    employeeId = employee.id,
+                    startDate = "2026-08-03",
+                    endDate = "2026-08-03",
+                    type = AbsenceType.SICK
+                )
+            ),
+            settings = quietSettings()
+        )
+
+        val storage =
+            DesktopStorage(directory)
+
+        storage.save(
+            DesktopWorkspace.fromAppState(state)
+        )
+
+        val controller =
+            DesktopController(storage)
+
+        controller.setManualAssignment(
+            employee.id,
+            LocalDate.parse("2026-08-03"),
+            day.id,
+            allowOperationalOverride = true
+        )
+
+        assertTrue(
+            controller.state.assignments.isEmpty()
+        )
     }
 
     private fun quietSettings(): PlannerSettings = PlannerSettings(

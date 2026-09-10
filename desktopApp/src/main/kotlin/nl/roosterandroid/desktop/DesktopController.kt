@@ -722,7 +722,8 @@ class DesktopController(private val storage: DesktopStorage) {
     fun setManualAssignment(
         employeeId: String,
         date: LocalDate,
-        templateId: String?
+        templateId: String?,
+        allowOperationalOverride: Boolean = false
     ) {
         val without = state.assignments.filterNot {
             it.employeeId == employeeId && it.date == date.toString()
@@ -750,8 +751,33 @@ class DesktopController(private val storage: DesktopStorage) {
             return
         }
 
-        manualBlockReason(employeeId, date, templateId, state)?.let {
+        hardManualBlockReason(
+            employeeId,
+            date,
+            templateId,
+            state
+        )?.let {
             showStatus("Niet opgeslagen: $it")
+            return
+        }
+
+        val overrideWarnings =
+            manualOverrideWarnings(
+                employeeId,
+                date,
+                templateId,
+                state
+            )
+
+        if (
+            overrideWarnings.isNotEmpty() &&
+            !allowOperationalOverride
+        ) {
+            showStatus(
+                "Niet opgeslagen: " +
+                    overrideWarnings.joinToString("; ") +
+                    " • bevestig handmatige override"
+            )
             return
         }
 
@@ -759,7 +785,11 @@ class DesktopController(private val storage: DesktopStorage) {
             employeeId = employeeId,
             date = date.toString(),
             shiftTemplateId = templateId,
-            source = "manual"
+            source =
+                if (overrideWarnings.isNotEmpty())
+                    "manual-override"
+                else
+                    "manual"
         )
 
         val proposed = state.copy(assignments = without + candidate)
@@ -784,7 +814,14 @@ class DesktopController(private val storage: DesktopStorage) {
             return
         }
 
-        commitActive(proposed, "Handmatige dienst opgeslagen")
+        commitActive(
+            proposed,
+            if (overrideWarnings.isNotEmpty()) {
+                "Handmatige dienst opgeslagen • bewuste override"
+            } else {
+                "Handmatige dienst opgeslagen"
+            }
+        )
 
         if (
             state.settings.autoFixAfterManualChanges
@@ -1083,7 +1120,7 @@ class DesktopController(private val storage: DesktopStorage) {
         notifyListeners()
     }
 
-    private fun manualBlockReason(
+    private fun hardManualBlockReason(
         employeeId: String,
         date: LocalDate,
         templateId: String,
@@ -1105,13 +1142,6 @@ class DesktopController(private val storage: DesktopStorage) {
 
         if (!employee.canWork(template.kind)) {
             return "${employee.name} mag deze dienst niet werken"
-        }
-
-        if (
-            date.dayOfWeek.value !in
-            template.enabledWeekdays
-        ) {
-            return "dienst is niet actief op deze weekdag"
         }
 
         if (!base.allowsShiftOn(date, template)) {
@@ -1137,6 +1167,36 @@ class DesktopController(private val storage: DesktopStorage) {
             return "${employee.name} is afwezig (${it.type.name.lowercase()})"
         }
 
+        return null
+    }
+
+    fun manualOverrideWarnings(
+        employeeId: String,
+        date: LocalDate,
+        templateId: String,
+        base: AppState = state
+    ): List<String> {
+        val employee =
+            base.employees.firstOrNull {
+                it.id == employeeId
+            } ?: return emptyList()
+
+        val template =
+            base.shiftTemplates.firstOrNull {
+                it.id == templateId
+            } ?: return emptyList()
+
+        val warnings =
+            mutableListOf<String>()
+
+        if (
+            date.dayOfWeek.value !in
+            template.enabledWeekdays
+        ) {
+            warnings +=
+                "diensttemplate is normaal niet actief op deze weekdag"
+        }
+
         val specific =
             base.availability.lastOrNull {
                 it.employeeId == employeeId &&
@@ -1158,7 +1218,8 @@ class DesktopController(private val storage: DesktopStorage) {
             }
 
         if (!available) {
-            return "${employee.name} is niet beschikbaar"
+            warnings +=
+                "${employee.name} staat als niet beschikbaar"
         }
 
         val fixedKind =
@@ -1172,7 +1233,8 @@ class DesktopController(private val storage: DesktopStorage) {
             fixedKind != null &&
             fixedKind != template.kind
         ) {
-            return "er staat een andere vaste dienst ingesteld"
+            warnings +=
+                "wijkt af van vaste dienst ${fixedKind.name.lowercase()}"
         }
 
         val earliestText =
@@ -1189,31 +1251,38 @@ class DesktopController(private val storage: DesktopStorage) {
                 weekly?.latestEnd
             }
 
-        val earliest = earliestText?.let {
-            runCatching {
-                LocalTime.parse(it)
-            }.getOrNull()
-        }
+        val earliest =
+            earliestText?.let {
+                runCatching {
+                    LocalTime.parse(it)
+                }.getOrNull()
+            }
 
-        val latest = latestText?.let {
-            runCatching {
-                LocalTime.parse(it)
-            }.getOrNull()
-        }
+        val latest =
+            latestText?.let {
+                runCatching {
+                    LocalTime.parse(it)
+                }.getOrNull()
+            }
 
         if (
             earliest != null &&
             template.startTime().isBefore(earliest)
         ) {
-            return "dienst begint vóór beschikbaarheid"
+            warnings +=
+                "dienst begint vóór beschikbaarheid $earliestText"
         }
 
         if (latest != null) {
             val start =
-                date.atTime(template.startTime())
+                date.atTime(
+                    template.startTime()
+                )
 
             var end =
-                date.atTime(template.endTime())
+                date.atTime(
+                    template.endTime()
+                )
 
             if (!end.isAfter(start)) {
                 end = end.plusDays(1)
@@ -1228,11 +1297,35 @@ class DesktopController(private val storage: DesktopStorage) {
             }
 
             if (end.isAfter(latestEnd)) {
-                return "dienst eindigt na beschikbaarheid"
+                warnings +=
+                    "dienst eindigt na beschikbaarheid $latestText"
             }
         }
 
-        return null
+        return warnings.distinct()
+    }
+
+    private fun manualBlockReason(
+        employeeId: String,
+        date: LocalDate,
+        templateId: String,
+        base: AppState
+    ): String? {
+        hardManualBlockReason(
+            employeeId,
+            date,
+            templateId,
+            base
+        )?.let {
+            return it
+        }
+
+        return manualOverrideWarnings(
+            employeeId,
+            date,
+            templateId,
+            base
+        ).firstOrNull()
     }
 
     fun refreshSmartTemplates() {
@@ -1320,7 +1413,8 @@ class DesktopController(private val storage: DesktopStorage) {
         date: String,
         start: String,
         end: String,
-        kind: ShiftKind
+        kind: ShiftKind,
+        allowOperationalOverride: Boolean = false
     ) {
         val parsed = runCatching {
             LocalDate.parse(date)
@@ -1364,13 +1458,33 @@ class DesktopController(private val storage: DesktopStorage) {
                 state
             }
 
-        manualBlockReason(
+        hardManualBlockReason(
             employeeId,
             parsed,
             template.id,
             working
         )?.let {
             showStatus("Niet opgeslagen: $it")
+            return
+        }
+
+        val overrideWarnings =
+            manualOverrideWarnings(
+                employeeId,
+                parsed,
+                template.id,
+                working
+            )
+
+        if (
+            overrideWarnings.isNotEmpty() &&
+            !allowOperationalOverride
+        ) {
+            showStatus(
+                "Niet opgeslagen: " +
+                    overrideWarnings.joinToString("; ") +
+                    " • bevestig handmatige override"
+            )
             return
         }
 
@@ -1384,7 +1498,11 @@ class DesktopController(private val storage: DesktopStorage) {
             employeeId = employeeId,
             date = parsed.toString(),
             shiftTemplateId = template.id,
-            source = "manual-custom"
+            source =
+                if (overrideWarnings.isNotEmpty())
+                    "manual-custom-override"
+                else
+                    "manual-custom"
         )
 
         val proposed =
@@ -1423,7 +1541,11 @@ class DesktopController(private val storage: DesktopStorage) {
 
         commitActive(
             proposed,
-            "Aangepaste dienst opgeslagen"
+            if (overrideWarnings.isNotEmpty()) {
+                "Aangepaste dienst opgeslagen • bewuste override"
+            } else {
+                "Aangepaste dienst opgeslagen"
+            }
         )
 
         if (

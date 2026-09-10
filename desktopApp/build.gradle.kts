@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "nl.roosterandroid"
-version = "0.12.0-alpha2"
+version = "0.12.0-alpha3"
 
 kotlin {
     jvmToolchain(17)
