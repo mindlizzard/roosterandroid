@@ -9,7 +9,7 @@ checks = {
         'enum class EmployeeRole { MANAGER, RM, TRAINEE, BORROWED, HOST }',
     ],
     'app/src/main/java/nl/roosterandroid/app/AtwValidator.kt': [
-        'consecutiveStreakIncluding(date, relevant)',
+        'consecutiveStreakIncluding(',
         'private fun consecutiveStreakIncluding(',
     ],
     'app/src/main/java/nl/roosterandroid/app/ScheduleEngine.kt': [
