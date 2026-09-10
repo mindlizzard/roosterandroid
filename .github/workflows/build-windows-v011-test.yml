@@ -1,4 +1,4 @@
-name: Build Windows v0.11 TEST
+name: Build Windows v0.11.1 DEBUG
 
 on:
   push:
@@ -12,17 +12,25 @@ permissions:
   contents: read
 
 jobs:
-  build-windows-v011:
+  build-windows-v0111:
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 35
 
     steps:
       - name: Checkout v0.10 source
         uses: actions/checkout@v5
 
-      - name: Apply v0.11 test integration in CI workspace
+      - name: Apply v0.11 integration
         shell: pwsh
         run: python .v011/apply_v011_changes.py .
+
+      - name: Apply v0.11.1 bugfixes
+        shell: pwsh
+        run: python .v011/apply_v0111_hotfix.py .
+
+      - name: Static debug verification
+        shell: pwsh
+        run: python .v011/verify_v0111.py .
 
       - name: Set up Java 17
         uses: actions/setup-java@v5
@@ -35,7 +43,7 @@ jobs:
         with:
           gradle-version: "8.9"
 
-      - name: Test and assemble desktop application
+      - name: Full regression tests and desktop build
         run: gradle -p desktopApp clean test installDist --stacktrace
 
       - name: Install WiX Toolset
@@ -62,11 +70,11 @@ jobs:
           jpackage `
             --type app-image `
             --name RoosterPlanner `
-            --app-version 0.11.0 `
+            --app-version 0.11.1 `
             --vendor "RoosterPlanner" `
-            --description "Offline roosterplanner v0.11 test met ATW-controle" `
+            --description "Offline roosterplanner v0.11.1 debug met ATW-controle" `
             --input $inputDir `
-            --main-jar "roosterplanner-windows-0.11.0.jar" `
+            --main-jar "roosterplanner-windows-0.11.1.jar" `
             --main-class "nl.roosterandroid.desktop.DesktopMainKt" `
             --java-options "-Dfile.encoding=UTF-8" `
             --icon $icon `
@@ -74,17 +82,17 @@ jobs:
 
           Compress-Archive `
             -Path "$outputDir\portable\RoosterPlanner" `
-            -DestinationPath "$outputDir\RoosterPlanner-0.11-test-portable.zip" `
+            -DestinationPath "$outputDir\RoosterPlanner-0.11.1-debug-portable.zip" `
             -CompressionLevel Optimal
 
           jpackage `
             --type exe `
             --name RoosterPlanner `
-            --app-version 0.11.0 `
+            --app-version 0.11.1 `
             --vendor "RoosterPlanner" `
-            --description "Offline roosterplanner v0.11 test met ATW-controle" `
+            --description "Offline roosterplanner v0.11.1 debug met ATW-controle" `
             --input $inputDir `
-            --main-jar "roosterplanner-windows-0.11.0.jar" `
+            --main-jar "roosterplanner-windows-0.11.1.jar" `
             --main-class "nl.roosterandroid.desktop.DesktopMainKt" `
             --java-options "-Dfile.encoding=UTF-8" `
             --icon $icon `
@@ -94,12 +102,12 @@ jobs:
             --win-shortcut `
             --dest "$outputDir\installer"
 
-      - name: Upload Windows v0.11 test package
+      - name: Upload Windows v0.11.1 debug package
         uses: actions/upload-artifact@v4
         with:
-          name: RoosterPlanner-Windows-v0.11-TEST
+          name: RoosterPlanner-Windows-v0.11.1-DEBUG
           path: |
-            desktopApp/build/windows/RoosterPlanner-0.11-test-portable.zip
+            desktopApp/build/windows/RoosterPlanner-0.11.1-debug-portable.zip
             desktopApp/build/windows/installer/*.exe
           if-no-files-found: error
           retention-days: 7
