@@ -125,7 +125,27 @@ class AppController(private val storage: ScheduleStorage) {
     }
 
     fun updateEmployee(employee: Employee) {
-        commit(state.copy(employees = state.employees.map { if (it.id == employee.id) employee else it }))
+        val normalized =
+            if (employee.role == EmployeeRole.HOST) {
+                employee.copy(
+                    canSetup = false,
+                    canClose = false,
+                    canKpi = false
+                )
+            } else {
+                employee
+            }
+
+        commit(
+            state.copy(
+                employees = state.employees.map {
+                    if (it.id == normalized.id)
+                        normalized
+                    else
+                        it
+                }
+            )
+        )
     }
 
     fun upsertAvailability(availability: Availability) {
@@ -420,18 +440,18 @@ class AppController(private val storage: ScheduleStorage) {
     }
 
     fun removeEmployee(id: String) {
-        val keepAssignments = state.assignments.filterNot { it.employeeId == id }
-        val keepHistory = state.assignmentHistory.filterNot { it.employeeId == id }
-        commit(state.copy(
-            employees = state.employees.filterNot { it.id == id },
-            assignments = keepAssignments,
-            assignmentHistory = keepHistory,
-            availability = state.availability.filterNot { it.employeeId == id },
-            weeklyAvailability = state.weeklyAvailability.filterNot { it.employeeId == id },
-            absences = state.absences.filterNot { it.employeeId == id },
-            responsibilities = state.responsibilities.filterNot { it.employeeId == id },
-            personMarkers = state.personMarkers.filterNot { it.employeeId == id }
-        ))
+        val result =
+            state.removeEmployeeSafely(id)
+                ?: return
+
+        commit(
+            result.state,
+            if (result.deactivated) {
+                "${result.employee.name} op inactief gezet • roosterhistorie behouden"
+            } else {
+                "${result.employee.name} verwijderd"
+            }
+        )
     }
 
     fun changeMonth(delta: Long) {
@@ -799,8 +819,28 @@ private fun TeamScreen(controller: AppController) {
             item { RecurringAvailabilityPanel(controller) }
         }
 
-        items(controller.state.employees, key = { it.id }) { employee ->
-            EmployeeCard(employee, controller::updateEmployee, controller::removeEmployee)
+        items(
+            controller.state.employees,
+            key = { it.id }
+        ) { employee ->
+            val referenced =
+                controller.state.assignments.any {
+                    it.employeeId == employee.id
+                } ||
+                controller.state.assignmentHistory.any {
+                    it.employeeId == employee.id
+                } ||
+                controller.state.swapHistory.any {
+                    it.firstEmployeeId == employee.id ||
+                        it.secondEmployeeId == employee.id
+                }
+
+            EmployeeCard(
+                employee = employee,
+                referenced = referenced,
+                onUpdate = controller::updateEmployee,
+                onDelete = controller::removeEmployee
+            )
         }
         item { Spacer(Modifier.height(24.dp)) }
     }
@@ -1000,72 +1040,393 @@ private fun RecurringAvailabilityPanel(controller: AppController) {
 }
 
 @Composable
-private fun EmployeeCard(employee: Employee, onUpdate: (Employee) -> Unit, onDelete: (String) -> Unit) {
+private fun EmployeeCard(
+    employee: Employee,
+    referenced: Boolean,
+    onUpdate: (Employee) -> Unit,
+    onDelete: (String) -> Unit
+) {
+    var confirmDelete by
+        remember(employee.id) {
+            mutableStateOf(false)
+        }
+
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = {
+                confirmDelete = false
+            },
+            title = {
+                Text(
+                    if (referenced)
+                        "Medewerker uit dienst"
+                    else
+                        "Medewerker verwijderen"
+                )
+            },
+            text = {
+                Text(
+                    if (referenced) {
+                        "${employee.name} heeft roosterhistorie. " +
+                            "De medewerker wordt op INACTIEF gezet. " +
+                            "Diensten, oude roosters en uren blijven bewaard."
+                    } else {
+                        "${employee.name} heeft geen roosterhistorie. " +
+                            "Deze medewerker echt verwijderen?"
+                    }
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirmDelete = false
+                        onDelete(employee.id)
+                    }
+                ) {
+                    Text(
+                        if (referenced)
+                            "Op inactief zetten"
+                        else
+                            "Verwijderen"
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        confirmDelete = false
+                    }
+                ) {
+                    Text("Annuleren")
+                }
+            }
+        )
+    }
+
+    val host =
+        employee.role ==
+            EmployeeRole.HOST
+
     Card(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .padding(
+                    horizontal = 16.dp,
+                    vertical = 6.dp
+                ),
         colors = CardDefaults.cardColors()
     ) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(employee.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                    Text("${roleLabel(employee.role)} • max ${employee.maxShiftsPerWeek} diensten/week")
+        Column(
+            Modifier.padding(14.dp),
+            verticalArrangement =
+                Arrangement.spacedBy(6.dp)
+        ) {
+            Row(
+                verticalAlignment =
+                    Alignment.CenterVertically
+            ) {
+                Column(
+                    Modifier.weight(1f)
+                ) {
+                    Text(
+                        employee.name,
+                        style =
+                            MaterialTheme
+                                .typography
+                                .titleMedium,
+                        fontWeight =
+                            FontWeight.Bold
+                    )
+
+                    Text(
+                        "${roleLabel(employee.role)} • " +
+                            "max ${employee.maxShiftsPerWeek} diensten/week"
+                    )
+
+                    if (!employee.active) {
+                        Text(
+                            "INACTIEF • historie blijft bewaard",
+                            style =
+                                MaterialTheme
+                                    .typography
+                                    .bodySmall,
+                            fontWeight =
+                                FontWeight.Bold
+                        )
+                    }
                 }
-                IconButton(onClick = { onDelete(employee.id) }) { Icon(Icons.Default.Delete, contentDescription = "Verwijder") }
+
+                IconButton(
+                    onClick = {
+                        confirmDelete = true
+                    }
+                ) {
+                    Icon(
+                        Icons.Default.Delete,
+                        contentDescription =
+                            "Uit dienst / verwijderen"
+                    )
+                }
             }
-            CapabilityRow("Setup", employee.canSetup) { onUpdate(employee.copy(canSetup = it)) }
-            CapabilityRow("Dag", employee.canDay) { onUpdate(employee.copy(canDay = it)) }
-            CapabilityRow("Tussen", employee.canMiddle) { onUpdate(employee.copy(canMiddle = it)) }
-            CapabilityRow("Sluit", employee.canClose) { onUpdate(employee.copy(canClose = it)) }
-            CapabilityRow("KPI", employee.canKpi) { onUpdate(employee.copy(canKpi = it)) }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Contractdagen/week", modifier = Modifier.weight(1f))
-                OutlinedButton(onClick = {
-                    val days = (employee.contractedDaysPerWeek - 1).coerceAtLeast(1)
-                    onUpdate(employee.copy(contractedDaysPerWeek = days))
-                }) { Text("−") }
-                Spacer(Modifier.width(8.dp))
-                Text(employee.contractedDaysPerWeek.toString(), fontWeight = FontWeight.Bold)
-                Spacer(Modifier.width(8.dp))
-                OutlinedButton(onClick = {
-                    val days = (employee.contractedDaysPerWeek + 1).coerceAtMost(7)
-                    onUpdate(employee.copy(contractedDaysPerWeek = days))
-                }) { Text("+") }
+
+            SettingSwitch(
+                "Actief",
+                employee.active
+            ) {
+                onUpdate(
+                    employee.copy(active = it)
+                )
             }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Contracturen/week", modifier = Modifier.weight(1f))
-                OutlinedButton(onClick = {
-                    onUpdate(employee.copy(
-                        contractedHoursPerWeek =
-                            (employee.contractedHoursPerWeek - 4.0).coerceAtLeast(4.0)
-                    ))
-                }) { Text("−") }
-                Spacer(Modifier.width(8.dp))
-                Text("${employee.contractedHoursPerWeek.toInt()}u", fontWeight = FontWeight.Bold)
-                Spacer(Modifier.width(8.dp))
-                OutlinedButton(onClick = {
-                    onUpdate(employee.copy(
-                        contractedHoursPerWeek =
-                            (employee.contractedHoursPerWeek + 4.0).coerceAtMost(60.0)
-                    ))
-                }) { Text("+") }
+
+            CapabilityRow(
+                label = "Setup",
+                checked =
+                    if (host)
+                        false
+                    else
+                        employee.canSetup,
+                enabled = !host
+            ) {
+                onUpdate(
+                    employee.copy(canSetup = it)
+                )
             }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Max diensten/week", modifier = Modifier.weight(1f))
-                OutlinedButton(onClick = { onUpdate(employee.copy(maxShiftsPerWeek = (employee.maxShiftsPerWeek - 1).coerceAtLeast(1))) }) { Text("−") }
+
+            CapabilityRow(
+                label = "Dag",
+                checked = employee.canDay
+            ) {
+                onUpdate(
+                    employee.copy(canDay = it)
+                )
+            }
+
+            CapabilityRow(
+                label = "Tussen",
+                checked = employee.canMiddle
+            ) {
+                onUpdate(
+                    employee.copy(canMiddle = it)
+                )
+            }
+
+            CapabilityRow(
+                label = "Sluit",
+                checked =
+                    if (host)
+                        false
+                    else
+                        employee.canClose,
+                enabled = !host
+            ) {
+                onUpdate(
+                    employee.copy(canClose = it)
+                )
+            }
+
+            CapabilityRow(
+                label = "KPI",
+                checked =
+                    if (host)
+                        false
+                    else
+                        employee.canKpi,
+                enabled = !host
+            ) {
+                onUpdate(
+                    employee.copy(canKpi = it)
+                )
+            }
+
+            Row(
+                verticalAlignment =
+                    Alignment.CenterVertically
+            ) {
+                Text(
+                    "Contractdagen/week",
+                    modifier = Modifier.weight(1f)
+                )
+
+                OutlinedButton(
+                    onClick = {
+                        val days =
+                            (
+                                employee
+                                    .contractedDaysPerWeek -
+                                    1
+                            ).coerceAtLeast(0)
+
+                        onUpdate(
+                            employee.copy(
+                                contractedDaysPerWeek =
+                                    days
+                            )
+                        )
+                    }
+                ) {
+                    Text("−")
+                }
+
                 Spacer(Modifier.width(8.dp))
-                Text(employee.maxShiftsPerWeek.toString(), fontWeight = FontWeight.Bold)
+
+                Text(
+                    employee
+                        .contractedDaysPerWeek
+                        .toString(),
+                    fontWeight = FontWeight.Bold
+                )
+
                 Spacer(Modifier.width(8.dp))
-                OutlinedButton(onClick = { onUpdate(employee.copy(maxShiftsPerWeek = (employee.maxShiftsPerWeek + 1).coerceAtMost(7))) }) { Text("+") }
+
+                OutlinedButton(
+                    onClick = {
+                        val days =
+                            (
+                                employee
+                                    .contractedDaysPerWeek +
+                                    1
+                            ).coerceAtMost(7)
+
+                        onUpdate(
+                            employee.copy(
+                                contractedDaysPerWeek =
+                                    days
+                            )
+                        )
+                    }
+                ) {
+                    Text("+")
+                }
+            }
+
+            Row(
+                verticalAlignment =
+                    Alignment.CenterVertically
+            ) {
+                Text(
+                    "Contracturen/week",
+                    modifier = Modifier.weight(1f)
+                )
+
+                OutlinedButton(
+                    onClick = {
+                        onUpdate(
+                            employee.copy(
+                                contractedHoursPerWeek =
+                                    (
+                                        employee
+                                            .contractedHoursPerWeek -
+                                            4.0
+                                    ).coerceAtLeast(0.0)
+                            )
+                        )
+                    }
+                ) {
+                    Text("−")
+                }
+
+                Spacer(Modifier.width(8.dp))
+
+                Text(
+                    "${employee.contractedHoursPerWeek.toInt()}u",
+                    fontWeight = FontWeight.Bold
+                )
+
+                Spacer(Modifier.width(8.dp))
+
+                OutlinedButton(
+                    onClick = {
+                        onUpdate(
+                            employee.copy(
+                                contractedHoursPerWeek =
+                                    (
+                                        employee
+                                            .contractedHoursPerWeek +
+                                            4.0
+                                    ).coerceAtMost(84.0)
+                            )
+                        )
+                    }
+                ) {
+                    Text("+")
+                }
+            }
+
+            Row(
+                verticalAlignment =
+                    Alignment.CenterVertically
+            ) {
+                Text(
+                    "Max diensten/week",
+                    modifier = Modifier.weight(1f)
+                )
+
+                OutlinedButton(
+                    onClick = {
+                        onUpdate(
+                            employee.copy(
+                                maxShiftsPerWeek =
+                                    (
+                                        employee
+                                            .maxShiftsPerWeek -
+                                            1
+                                    ).coerceAtLeast(1)
+                            )
+                        )
+                    }
+                ) {
+                    Text("−")
+                }
+
+                Spacer(Modifier.width(8.dp))
+
+                Text(
+                    employee
+                        .maxShiftsPerWeek
+                        .toString(),
+                    fontWeight = FontWeight.Bold
+                )
+
+                Spacer(Modifier.width(8.dp))
+
+                OutlinedButton(
+                    onClick = {
+                        onUpdate(
+                            employee.copy(
+                                maxShiftsPerWeek =
+                                    (
+                                        employee
+                                            .maxShiftsPerWeek +
+                                            1
+                                    ).coerceAtMost(7)
+                            )
+                        )
+                    }
+                ) {
+                    Text("+")
+                }
             }
         }
     }
 }
 
 @Composable
-private fun CapabilityRow(label: String, checked: Boolean, onChecked: (Boolean) -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Checkbox(checked = checked, onCheckedChange = onChecked)
+private fun CapabilityRow(
+    label: String,
+    checked: Boolean,
+    enabled: Boolean = true,
+    onChecked: (Boolean) -> Unit
+) {
+    Row(
+        verticalAlignment =
+            Alignment.CenterVertically
+    ) {
+        Checkbox(
+            checked = checked,
+            onCheckedChange = onChecked,
+            enabled = enabled
+        )
         Text(label)
     }
 }

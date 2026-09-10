@@ -46,7 +46,7 @@ checks = {
         'archivedAutoTemplateDoesNotComeBack',
         'editingReferencedTemplatePreservesOldShiftAndCreatesReplacement',
     ],
-    'desktopApp/build.gradle.kts': ['version = "0.12.0-alpha4"'],
+    'desktopApp/build.gradle.kts': ['version = "0.12.0-alpha5"'],
 }
 
 
@@ -84,8 +84,8 @@ checks.update({
         'atomicWrite(',
     ],
     'app/build.gradle.kts': [
-        'versionCode = 15',
-        'versionName = "0.12.0-alpha4"',
+        'versionCode = 16',
+        'versionName = "0.12.0-alpha5"',
     ],
     'desktopApp/src/main/kotlin/nl/roosterandroid/desktop/DesktopController.kt': [
         'borrowEmployeeFromLocation(',
@@ -154,6 +154,33 @@ checks.update({
     'desktopApp/src/test/kotlin/nl/roosterandroid/desktop/DesktopControllerTest.kt': [
         'borrowedManagerPersistsSourceAndCanReturn',
         'traineeCannotBeBorrowedAsExperiencedManager',
+    ],
+})
+
+
+checks.update({
+    'app/src/main/java/nl/roosterandroid/app/EmployeeStateOps.kt': [
+        'fun AppState.removeEmployeeSafely(',
+        'val hasRosterReference',
+        'swapHistory.any',
+        'it.copy(active = false)',
+    ],
+    'app/src/main/java/nl/roosterandroid/app/MainActivity.kt': [
+        'removeEmployeeSafely(id)',
+        'var confirmDelete by',
+        '"Op inactief zetten"',
+        'SettingSwitch(',
+        '"Actief"',
+        'enabled = !host',
+    ],
+    'desktopApp/src/main/kotlin/nl/roosterandroid/desktop/DesktopController.kt': [
+        'state.removeEmployeeSafely(id)',
+        'roosterhistorie behouden',
+    ],
+    'app/src/test/java/nl/roosterandroid/app/EmployeeStateOpsTest.kt': [
+        'referencedEmployeeIsArchivedInsteadOfDeleted',
+        'unusedEmployeeIsRemovedWithPersonalRules',
+        'swapHistoryAlsoProtectsEmployee',
     ],
 })
 

@@ -26,6 +26,7 @@ import nl.roosterandroid.app.allowsShiftOn
 import nl.roosterandroid.app.canWork
 import nl.roosterandroid.app.countsAsManager
 import nl.roosterandroid.app.isExperiencedManager
+import nl.roosterandroid.app.removeEmployeeSafely
 import java.nio.file.Path
 import java.time.DayOfWeek
 import java.time.LocalDate
@@ -438,45 +439,17 @@ class DesktopController(private val storage: DesktopStorage) {
     }
 
     fun removeEmployee(id: String) {
-        val employee = state.employees
-            .firstOrNull { it.id == id }
-            ?: return
-
-        val referenced =
-            (state.assignments + state.assignmentHistory)
-                .any { it.employeeId == id }
-
-        if (referenced) {
-            commitActive(
-                state.copy(
-                    employees = state.employees.map {
-                        if (it.id == id)
-                            it.copy(active = false)
-                        else
-                            it
-                    }
-                ),
-                "${employee.name} gedeactiveerd • roosterhistorie behouden"
-            )
-            return
-        }
+        val result =
+            state.removeEmployeeSafely(id)
+                ?: return
 
         commitActive(
-            state.copy(
-                employees = state.employees
-                    .filterNot { it.id == id },
-                availability = state.availability
-                    .filterNot { it.employeeId == id },
-                weeklyAvailability = state.weeklyAvailability
-                    .filterNot { it.employeeId == id },
-                absences = state.absences
-                    .filterNot { it.employeeId == id },
-                responsibilities = state.responsibilities
-                    .filterNot { it.employeeId == id },
-                personMarkers = state.personMarkers
-                    .filterNot { it.employeeId == id }
-            ),
-            "${employee.name} verwijderd"
+            result.state,
+            if (result.deactivated) {
+                "${result.employee.name} gedeactiveerd • roosterhistorie behouden"
+            } else {
+                "${result.employee.name} verwijderd"
+            }
         )
     }
 
