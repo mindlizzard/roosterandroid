@@ -241,7 +241,7 @@ class DesktopController(private val storage: DesktopStorage) {
                 .firstOrNull {
                     it.id == sourceEmployeeId &&
                         it.active &&
-                        it.countsAsManager() &&
+                        it.isExperiencedManager() &&
                         it.role !=
                             EmployeeRole.BORROWED
                 }
@@ -296,6 +296,135 @@ class DesktopController(private val storage: DesktopStorage) {
                     state.employees + borrowed
             ),
             "${borrowed.name} geleend van ${sourceLocation.name}"
+        )
+
+        return true
+    }
+
+    fun returnBorrowedManager(
+        employeeId: String,
+        removeCurrentAssignments: Boolean = false
+    ): Boolean {
+        val employee =
+            state.employees.firstOrNull {
+                it.id == employeeId &&
+                    it.role == EmployeeRole.BORROWED
+            }
+
+        if (employee == null) {
+            showStatus(
+                "Selecteer een actieve leenmanager"
+            )
+            return false
+        }
+
+        val currentAssignments =
+            state.assignments.filter {
+                it.employeeId == employee.id
+            }
+
+        if (
+            currentAssignments.isNotEmpty() &&
+            !removeCurrentAssignments
+        ) {
+            showStatus(
+                "${employee.name} heeft nog " +
+                    "${currentAssignments.size} dienst(en) in het rooster"
+            )
+            return false
+        }
+
+        val hasHistory =
+            state.assignmentHistory.any {
+                it.employeeId == employee.id
+            } ||
+                state.swapHistory.any {
+                    it.firstEmployeeId == employee.id ||
+                        it.secondEmployeeId == employee.id
+                }
+
+        val remainingAssignments =
+            if (removeCurrentAssignments) {
+                state.assignments.filterNot {
+                    it.employeeId == employee.id
+                }
+            } else {
+                state.assignments
+            }
+
+        val nextEmployees =
+            if (hasHistory) {
+                state.employees.map {
+                    if (it.id == employee.id) {
+                        it.copy(active = false)
+                    } else {
+                        it
+                    }
+                }
+            } else {
+                state.employees.filterNot {
+                    it.id == employee.id
+                }
+            }
+
+        val nextState =
+            state.copy(
+                employees = nextEmployees,
+                assignments = remainingAssignments,
+                availability =
+                    if (hasHistory) {
+                        state.availability
+                    } else {
+                        state.availability.filterNot {
+                            it.employeeId == employee.id
+                        }
+                    },
+                weeklyAvailability =
+                    if (hasHistory) {
+                        state.weeklyAvailability
+                    } else {
+                        state.weeklyAvailability.filterNot {
+                            it.employeeId == employee.id
+                        }
+                    },
+                absences =
+                    if (hasHistory) {
+                        state.absences
+                    } else {
+                        state.absences.filterNot {
+                            it.employeeId == employee.id
+                        }
+                    },
+                responsibilities =
+                    if (hasHistory) {
+                        state.responsibilities
+                    } else {
+                        state.responsibilities.filterNot {
+                            it.employeeId == employee.id
+                        }
+                    },
+                personMarkers =
+                    if (hasHistory) {
+                        state.personMarkers
+                    } else {
+                        state.personMarkers.filterNot {
+                            it.employeeId == employee.id
+                        }
+                    }
+            )
+
+        val sourceName =
+            employee.loanSourceLocationName
+                ?.takeIf { it.isNotBlank() }
+                ?: "bronvestiging"
+
+        commitActive(
+            nextState,
+            if (hasHistory) {
+                "${employee.name} terug naar $sourceName • historie behouden"
+            } else {
+                "${employee.name} terug naar $sourceName"
+            }
         )
 
         return true

@@ -46,7 +46,7 @@ checks = {
         'archivedAutoTemplateDoesNotComeBack',
         'editingReferencedTemplatePreservesOldShiftAndCreatesReplacement',
     ],
-    'desktopApp/build.gradle.kts': ['version = "0.12.0-alpha3"'],
+    'desktopApp/build.gradle.kts': ['version = "0.12.0-alpha4"'],
 }
 
 
@@ -84,8 +84,8 @@ checks.update({
         'atomicWrite(',
     ],
     'app/build.gradle.kts': [
-        'versionCode = 14',
-        'versionName = "0.12.0-alpha3"',
+        'versionCode = 15',
+        'versionName = "0.12.0-alpha4"',
     ],
     'desktopApp/src/main/kotlin/nl/roosterandroid/desktop/DesktopController.kt': [
         'borrowEmployeeFromLocation(',
@@ -135,6 +135,25 @@ checks.update({
     'desktopApp/src/test/kotlin/nl/roosterandroid/desktop/DesktopControllerTest.kt': [
         'operationalManualOverrideRequiresExplicitConfirmation',
         'approvedAbsenceRemainsHardBlockDuringOverride',
+    ],
+})
+
+
+checks.update({
+    'desktopApp/src/main/kotlin/nl/roosterandroid/desktop/DesktopController.kt': [
+        'fun returnBorrowedManager(',
+        'removeCurrentAssignments: Boolean = false',
+        'it.isExperiencedManager()',
+        'historie behouden',
+    ],
+    'desktopApp/src/main/kotlin/nl/roosterandroid/desktop/TeamPanel.kt': [
+        'Leenmanager terugsturen',
+        'returnBorrowedManager()',
+        'isExperiencedManager()',
+    ],
+    'desktopApp/src/test/kotlin/nl/roosterandroid/desktop/DesktopControllerTest.kt': [
+        'borrowedManagerPersistsSourceAndCanReturn',
+        'traineeCannotBeBorrowedAsExperiencedManager',
     ],
 })
 

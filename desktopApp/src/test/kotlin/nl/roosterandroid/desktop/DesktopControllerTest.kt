@@ -6,6 +6,7 @@ import nl.roosterandroid.app.AbsenceType
 import nl.roosterandroid.app.Assignment
 import nl.roosterandroid.app.Availability
 import nl.roosterandroid.app.Employee
+import nl.roosterandroid.app.EmployeeRole
 import nl.roosterandroid.app.PlannerSettings
 import nl.roosterandroid.app.ShiftKind
 import nl.roosterandroid.app.ShiftTemplate
@@ -335,6 +336,180 @@ class DesktopControllerTest {
 
         assertTrue(
             controller.state.assignments.isEmpty()
+        )
+    }
+
+
+    @Test
+    fun borrowedManagerPersistsSourceAndCanReturn() {
+        val directory =
+            Files.createTempDirectory(
+                "roosterplanner-borrowed-"
+            )
+
+        val sourceEmployee = Employee(
+            name = "Kevin",
+            role = EmployeeRole.MANAGER,
+            contractedDaysPerWeek = 5,
+            contractedHoursPerWeek = 40.0
+        )
+
+        val target =
+            LocationWorkspace(
+                name = "Delft",
+                state = AppState(
+                    year = 2026,
+                    month = 9,
+                    settings =
+                        quietSettings().copy(
+                            locationName = "Delft"
+                        )
+                )
+            )
+
+        val source =
+            LocationWorkspace(
+                name = "Delft Noord",
+                state = AppState(
+                    year = 2026,
+                    month = 9,
+                    employees =
+                        listOf(sourceEmployee),
+                    settings =
+                        quietSettings().copy(
+                            locationName =
+                                "Delft Noord"
+                        )
+                )
+            )
+
+        val storage =
+            DesktopStorage(directory)
+
+        storage.save(
+            DesktopWorkspace(
+                activeLocationId = target.id,
+                locations =
+                    listOf(target, source)
+            )
+        )
+
+        val controller =
+            DesktopController(storage)
+
+        assertTrue(
+            controller.borrowEmployeeFromLocation(
+                source.id,
+                sourceEmployee.id
+            )
+        )
+
+        val borrowed =
+            controller.state.employees.single {
+                it.role ==
+                    EmployeeRole.BORROWED
+            }
+
+        assertEquals(
+            source.id,
+            borrowed.loanSourceLocationId
+        )
+
+        assertEquals(
+            sourceEmployee.id,
+            borrowed.loanSourceEmployeeId
+        )
+
+        assertEquals(
+            "Delft Noord",
+            borrowed.loanSourceLocationName
+        )
+
+        val reloaded =
+            DesktopController(
+                DesktopStorage(directory)
+            )
+
+        val persisted =
+            reloaded.state.employees.single {
+                it.role ==
+                    EmployeeRole.BORROWED
+            }
+
+        assertEquals(
+            "Delft Noord",
+            persisted.loanSourceLocationName
+        )
+
+        assertTrue(
+            reloaded.returnBorrowedManager(
+                persisted.id
+            )
+        )
+
+        assertFalse(
+            reloaded.state.employees.any {
+                it.id == persisted.id
+            }
+        )
+    }
+
+    @Test
+    fun traineeCannotBeBorrowedAsExperiencedManager() {
+        val directory =
+            Files.createTempDirectory(
+                "roosterplanner-trainee-borrow-"
+            )
+
+        val trainee = Employee(
+            name = "Trainee",
+            role = EmployeeRole.TRAINEE
+        )
+
+        val target =
+            LocationWorkspace(
+                name = "Delft"
+            )
+
+        val source =
+            LocationWorkspace(
+                name = "Delft Noord",
+                state = AppState(
+                    employees = listOf(trainee),
+                    settings =
+                        quietSettings().copy(
+                            locationName =
+                                "Delft Noord"
+                        )
+                )
+            )
+
+        val storage =
+            DesktopStorage(directory)
+
+        storage.save(
+            DesktopWorkspace(
+                activeLocationId = target.id,
+                locations =
+                    listOf(target, source)
+            )
+        )
+
+        val controller =
+            DesktopController(storage)
+
+        assertFalse(
+            controller.borrowEmployeeFromLocation(
+                source.id,
+                trainee.id
+            )
+        )
+
+        assertTrue(
+            controller.state.employees.none {
+                it.role ==
+                    EmployeeRole.BORROWED
+            }
         )
     }
 

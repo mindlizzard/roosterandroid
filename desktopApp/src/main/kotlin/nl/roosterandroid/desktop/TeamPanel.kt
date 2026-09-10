@@ -2,6 +2,7 @@ package nl.roosterandroid.desktop
 
 import nl.roosterandroid.app.Employee
 import nl.roosterandroid.app.WeeklyAvailability
+import nl.roosterandroid.app.isExperiencedManager
 import java.awt.BorderLayout
 import java.awt.Dimension
 import java.awt.FlowLayout
@@ -35,6 +36,7 @@ internal class TeamPanel(private val controller: DesktopController) : JPanel(Bor
             add(panelTitle("Team en beschikbaarheid"))
             add(primaryButton("Medewerker toevoegen") { addEmployee() })
             add(primaryButton("Leenmanager uit vestiging") { addBorrowedManager() })
+            add(secondaryButton("Leenmanager terugsturen") { returnBorrowedManager() })
             add(secondaryButton("Wijzigen") { editEmployee() })
             add(secondaryButton("Uit dienst / verwijderen") { removeEmployee() })
         }
@@ -176,8 +178,7 @@ internal class TeamPanel(private val controller: DesktopController) : JPanel(Bor
                         .asSequence()
                         .filter {
                             it.active &&
-                                it.role !=
-                                    nl.roosterandroid.app.EmployeeRole.HOST &&
+                                it.isExperiencedManager() &&
                                 it.role !=
                                     nl.roosterandroid.app.EmployeeRole.BORROWED
                         }
@@ -220,6 +221,61 @@ internal class TeamPanel(private val controller: DesktopController) : JPanel(Bor
         controller.borrowEmployeeFromLocation(
             choice.locationId,
             choice.employeeId
+        )
+    }
+
+    private fun returnBorrowedManager() {
+        val employee =
+            selectedEmployee() ?: return
+
+        if (
+            employee.role !=
+                nl.roosterandroid.app.EmployeeRole.BORROWED
+        ) {
+            controller.showStatus(
+                "Selecteer eerst een leenmanager"
+            )
+            return
+        }
+
+        val currentCount =
+            controller.state.assignments.count {
+                it.employeeId == employee.id
+            }
+
+        val source =
+            employee.loanSourceLocationName
+                ?.takeIf { it.isNotBlank() }
+                ?: "bronvestiging"
+
+        val message =
+            if (currentCount > 0) {
+                "${employee.name} terugsturen naar $source?\n\n" +
+                    "Deze leenmanager heeft nog $currentCount dienst(en) " +
+                    "in het huidige rooster.\n" +
+                    "Die diensten worden verwijderd.\n" +
+                    "Bewaarde historie blijft behouden."
+            } else {
+                "${employee.name} terugsturen naar $source?"
+            }
+
+        val answer =
+            JOptionPane.showConfirmDialog(
+                this,
+                message,
+                "Leenmanager terugsturen",
+                JOptionPane.YES_NO_OPTION,
+                JOptionPane.WARNING_MESSAGE
+            )
+
+        if (answer != JOptionPane.YES_OPTION) {
+            return
+        }
+
+        controller.returnBorrowedManager(
+            employee.id,
+            removeCurrentAssignments =
+                currentCount > 0
         )
     }
 
