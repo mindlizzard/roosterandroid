@@ -46,7 +46,7 @@ checks = {
         'archivedAutoTemplateDoesNotComeBack',
         'editingReferencedTemplatePreservesOldShiftAndCreatesReplacement',
     ],
-    'desktopApp/build.gradle.kts': ['version = "0.12.0-alpha6"'],
+    'desktopApp/build.gradle.kts': ['version = "0.12.0-alpha7"'],
 }
 
 
@@ -89,8 +89,8 @@ checks.update({
         '.fromAppState(oldState)',
     ],
     'app/build.gradle.kts': [
-        'versionCode = 17',
-        'versionName = "0.12.0-alpha6"',
+        'versionCode = 18',
+        'versionName = "0.12.0-alpha7"',
     ],
     'desktopApp/src/main/kotlin/nl/roosterandroid/desktop/DesktopController.kt': [
         'borrowEmployeeFromLocation(',
@@ -211,6 +211,26 @@ checks.update({
         'workspaceRoundTripPreservesLocations',
         'copyingLocationKeepsTeamButClearsDatedData',
         'invalidActiveLocationIsNormalized',
+    ],
+})
+
+
+checks.update({
+    'app/src/main/java/nl/roosterandroid/app/WorkspaceModels.kt': [
+        'fun LocationWorkspace.borrowableManagers()',
+        'fun Employee.asBorrowedManagerFrom(',
+        'loanSourceLocationId =',
+        'loanSourceEmployeeId = id',
+    ],
+    'app/src/main/java/nl/roosterandroid/app/MainActivity.kt': [
+        'fun borrowEmployeeFromLocation(',
+        'fun returnBorrowedManager(',
+        'private fun BorrowedManagerPanel(',
+        '"Leen manager uit vestiging"',
+        'it != EmployeeRole.BORROWED',
+    ],
+    'app/src/test/java/nl/roosterandroid/app/WorkspaceModelTest.kt': [
+        'borrowedCopyKeepsSourceAndTraineeIsExcluded',
     ],
 })
 

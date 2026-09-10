@@ -13,8 +13,8 @@ android {
         applicationId = "nl.roosterandroid.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 17
-        versionName = "0.12.0-alpha6"
+        versionCode = 18
+        versionName = "0.12.0-alpha7"
     }
 
     buildTypes {

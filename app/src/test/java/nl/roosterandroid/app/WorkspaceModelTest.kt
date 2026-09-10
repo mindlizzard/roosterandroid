@@ -104,6 +104,82 @@ class WorkspaceModelTest {
     }
 
     @Test
+    fun borrowedCopyKeepsSourceAndTraineeIsExcluded() {
+        val manager = Employee(
+            name = "Kevin",
+            role = EmployeeRole.MANAGER
+        )
+
+        val trainee = Employee(
+            name = "Trainee",
+            role = EmployeeRole.TRAINEE
+        )
+
+        val source = LocationWorkspace(
+            name = "Delft Noord",
+            state = AppState(
+                employees = listOf(
+                    manager,
+                    trainee
+                )
+            )
+        )
+
+        val candidates =
+            source.borrowableManagers()
+
+        assertEquals(
+            listOf(manager.id),
+            candidates.map { it.id }
+        )
+
+        val borrowed =
+            manager.asBorrowedManagerFrom(
+                source
+            )
+
+        assertTrue(
+            borrowed.id != manager.id
+        )
+
+        assertEquals(
+            EmployeeRole.BORROWED,
+            borrowed.role
+        )
+
+        assertEquals(
+            source.id,
+            borrowed.loanSourceLocationId
+        )
+
+        assertEquals(
+            manager.id,
+            borrowed.loanSourceEmployeeId
+        )
+
+        assertEquals(
+            "Delft Noord",
+            borrowed.loanSourceLocationName
+        )
+
+        assertEquals(
+            0,
+            borrowed.contractedDaysPerWeek
+        )
+
+        assertEquals(
+            0.0,
+            borrowed.contractedHoursPerWeek,
+            0.0
+        )
+
+        assertEquals(
+            3,
+            borrowed.maxShiftsPerWeek
+        )
+    }
+
+    @Test
     fun invalidActiveLocationIsNormalized() {
         val location = LocationWorkspace(name = "Delft")
 

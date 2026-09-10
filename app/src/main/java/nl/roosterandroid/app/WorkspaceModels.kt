@@ -110,3 +110,26 @@ fun AppState.copyForNewLocation(
             locationName = locationName
         )
     )
+
+
+fun LocationWorkspace.borrowableManagers(): List<Employee> =
+    state.employees.filter {
+        it.active &&
+            it.isExperiencedManager() &&
+            it.role != EmployeeRole.BORROWED
+    }
+
+fun Employee.asBorrowedManagerFrom(
+    sourceLocation: LocationWorkspace
+): Employee =
+    copy(
+        id = UUID.randomUUID().toString(),
+        role = EmployeeRole.BORROWED,
+        loanSourceLocationId = sourceLocation.id,
+        loanSourceEmployeeId = id,
+        loanSourceLocationName = sourceLocation.name,
+        contractedDaysPerWeek = 0,
+        contractedHoursPerWeek = 0.0,
+        maxShiftsPerWeek = 3,
+        active = true
+    )

@@ -149,6 +149,187 @@ class AppController(private val storage: ScheduleStorage) {
         commit(state.copy(employees = state.employees + employee), "$clean toegevoegd")
     }
 
+    fun borrowEmployeeFromLocation(
+        sourceLocationId: String,
+        sourceEmployeeId: String
+    ): Boolean {
+        val sourceLocation =
+            workspace.locations.firstOrNull {
+                it.id == sourceLocationId
+            }
+
+        if (
+            sourceLocation == null ||
+            sourceLocation.id == activeLocation.id
+        ) {
+            status = "Bronvestiging niet gevonden"
+            return false
+        }
+
+        val sourceEmployee =
+            sourceLocation
+                .borrowableManagers()
+                .firstOrNull {
+                    it.id == sourceEmployeeId
+                }
+
+        if (sourceEmployee == null) {
+            status = "Manager niet beschikbaar om te lenen"
+            return false
+        }
+
+        val alreadyPresent =
+            state.employees.any {
+                it.active &&
+                    it.role == EmployeeRole.BORROWED &&
+                    it.loanSourceLocationId == sourceLocation.id &&
+                    it.loanSourceEmployeeId == sourceEmployee.id
+            }
+
+        if (alreadyPresent) {
+            status =
+                "${sourceEmployee.name} staat al als leenmanager in ${activeLocation.name}"
+            return false
+        }
+
+        val borrowed =
+            sourceEmployee.asBorrowedManagerFrom(sourceLocation)
+
+        commit(
+            state.copy(
+                employees = state.employees + borrowed
+            ),
+            "${borrowed.name} geleend van ${sourceLocation.name}"
+        )
+
+        return true
+    }
+
+    fun returnBorrowedManager(
+        employeeId: String,
+        removeCurrentAssignments: Boolean = false
+    ): Boolean {
+        val employee =
+            state.employees.firstOrNull {
+                it.id == employeeId &&
+                    it.role == EmployeeRole.BORROWED
+            }
+
+        if (employee == null) {
+            status = "Selecteer een leenmanager"
+            return false
+        }
+
+        val currentAssignments =
+            state.assignments.filter {
+                it.employeeId == employee.id
+            }
+
+        if (
+            currentAssignments.isNotEmpty() &&
+            !removeCurrentAssignments
+        ) {
+            status =
+                "${employee.name} heeft nog ${currentAssignments.size} dienst(en)"
+            return false
+        }
+
+        val hasHistory =
+            state.assignmentHistory.any {
+                it.employeeId == employee.id
+            } ||
+                state.swapHistory.any {
+                    it.firstEmployeeId == employee.id ||
+                        it.secondEmployeeId == employee.id
+                }
+
+        val assignments =
+            if (removeCurrentAssignments) {
+                state.assignments.filterNot {
+                    it.employeeId == employee.id
+                }
+            } else {
+                state.assignments
+            }
+
+        val employees =
+            if (hasHistory) {
+                state.employees.map {
+                    if (it.id == employee.id) {
+                        it.copy(active = false)
+                    } else {
+                        it
+                    }
+                }
+            } else {
+                state.employees.filterNot {
+                    it.id == employee.id
+                }
+            }
+
+        val next =
+            state.copy(
+                employees = employees,
+                assignments = assignments,
+                availability =
+                    if (hasHistory) {
+                        state.availability
+                    } else {
+                        state.availability.filterNot {
+                            it.employeeId == employee.id
+                        }
+                    },
+                weeklyAvailability =
+                    if (hasHistory) {
+                        state.weeklyAvailability
+                    } else {
+                        state.weeklyAvailability.filterNot {
+                            it.employeeId == employee.id
+                        }
+                    },
+                absences =
+                    if (hasHistory) {
+                        state.absences
+                    } else {
+                        state.absences.filterNot {
+                            it.employeeId == employee.id
+                        }
+                    },
+                responsibilities =
+                    if (hasHistory) {
+                        state.responsibilities
+                    } else {
+                        state.responsibilities.filterNot {
+                            it.employeeId == employee.id
+                        }
+                    },
+                personMarkers =
+                    if (hasHistory) {
+                        state.personMarkers
+                    } else {
+                        state.personMarkers.filterNot {
+                            it.employeeId == employee.id
+                        }
+                    }
+            )
+
+        val source =
+            employee.loanSourceLocationName
+                ?.takeIf { it.isNotBlank() }
+                ?: "bronvestiging"
+
+        commit(
+            next,
+            if (hasHistory) {
+                "${employee.name} terug naar $source • historie behouden"
+            } else {
+                "${employee.name} terug naar $source"
+            }
+        )
+
+        return true
+    }
+
     fun updateEmployee(employee: Employee) {
         val normalized =
             if (employee.role == EmployeeRole.HOST) {
@@ -1083,7 +1264,10 @@ private fun TeamScreen(controller: AppController) {
     var earliestStart by remember { mutableStateOf("") }
     var latestEnd by remember { mutableStateOf("") }
     var fixedKindIndex by remember { mutableIntStateOf(0) }
-    val roles = EmployeeRole.entries
+    val roles =
+        EmployeeRole.entries.filter {
+            it != EmployeeRole.BORROWED
+        }
     val fixedKinds = listOf<ShiftKind?>(null, ShiftKind.SETUP, ShiftKind.DAY, ShiftKind.MIDDLE, ShiftKind.CLOSE, ShiftKind.KPI)
 
     LazyColumn(modifier = Modifier.fillMaxSize()) {
@@ -1110,6 +1294,10 @@ private fun TeamScreen(controller: AppController) {
                     modifier = Modifier.fillMaxWidth()
                 ) { Text("Toevoegen") }
             }
+        }
+
+        item {
+            BorrowedManagerPanel(controller)
         }
 
         if (controller.state.employees.isNotEmpty()) {
@@ -1227,6 +1415,279 @@ private fun TeamScreen(controller: AppController) {
             )
         }
         item { Spacer(Modifier.height(24.dp)) }
+    }
+}
+
+@Composable
+private fun BorrowedManagerPanel(
+    controller: AppController
+) {
+    val otherLocations =
+        controller.workspace.locations.filter {
+            it.id != controller.activeLocation.id
+        }
+
+    var sourceIndex by remember(
+        controller.activeLocation.id,
+        otherLocations.size
+    ) {
+        mutableIntStateOf(0)
+    }
+
+    val source =
+        otherLocations.getOrNull(
+            sourceIndex.coerceIn(
+                0,
+                maxOf(0, otherLocations.lastIndex)
+            )
+        )
+
+    val candidates =
+        source
+            ?.borrowableManagers()
+            ?.filterNot { candidate ->
+                controller.state.employees.any {
+                    it.active &&
+                        it.role == EmployeeRole.BORROWED &&
+                        it.loanSourceLocationId == source.id &&
+                        it.loanSourceEmployeeId == candidate.id
+                }
+            }
+            ?: emptyList()
+
+    var managerIndex by remember(
+        source?.id,
+        candidates.size
+    ) {
+        mutableIntStateOf(0)
+    }
+
+    val manager =
+        candidates.getOrNull(
+            managerIndex.coerceIn(
+                0,
+                maxOf(0, candidates.lastIndex)
+            )
+        )
+
+    val borrowed =
+        controller.state.employees.filter {
+            it.active &&
+                it.role == EmployeeRole.BORROWED
+        }
+
+    var returningId by remember(
+        controller.activeLocation.id
+    ) {
+        mutableStateOf<String?>(null)
+    }
+
+    val returning =
+        borrowed.firstOrNull {
+            it.id == returningId
+        }
+
+    if (returning != null) {
+        val assignmentCount =
+            controller.state.assignments.count {
+                it.employeeId == returning.id
+            }
+
+        AlertDialog(
+            onDismissRequest = {
+                returningId = null
+            },
+            title = {
+                Text("Leenmanager terugsturen")
+            },
+            text = {
+                Text(
+                    if (assignmentCount > 0) {
+                        "${returning.name} heeft nog " +
+                            "$assignmentCount dienst(en).\n\n" +
+                            "Bij terugsturen worden die diensten " +
+                            "uit het huidige rooster verwijderd. " +
+                            "Historie blijft behouden."
+                    } else {
+                        "${returning.name} terugsturen naar " +
+                            (
+                                returning.loanSourceLocationName
+                                    ?: "de bronvestiging"
+                            ) +
+                            "?"
+                    }
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        controller.returnBorrowedManager(
+                            returning.id,
+                            removeCurrentAssignments =
+                                assignmentCount > 0
+                        )
+                        returningId = null
+                    }
+                ) {
+                    Text("Terugsturen")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        returningId = null
+                    }
+                ) {
+                    Text("Annuleren")
+                }
+            }
+        )
+    }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(
+                horizontal = 16.dp,
+                vertical = 8.dp
+            )
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement =
+                Arrangement.spacedBy(8.dp)
+        ) {
+            Text(
+                "Leenmanagers",
+                style =
+                    MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+
+            if (otherLocations.isEmpty()) {
+                Text(
+                    "Voeg eerst een tweede vestiging toe.",
+                    style =
+                        MaterialTheme.typography.bodySmall
+                )
+            } else {
+                Row(
+                    verticalAlignment =
+                        Alignment.CenterVertically
+                ) {
+                    Text(
+                        "Bron: ${source?.name ?: "-"}",
+                        modifier = Modifier.weight(1f)
+                    )
+
+                    OutlinedButton(
+                        enabled =
+                            otherLocations.size > 1,
+                        onClick = {
+                            sourceIndex =
+                                (sourceIndex + 1) %
+                                    otherLocations.size
+                            managerIndex = 0
+                        }
+                    ) {
+                        Text("Volgende")
+                    }
+                }
+
+                Row(
+                    verticalAlignment =
+                        Alignment.CenterVertically
+                ) {
+                    Text(
+                        "Manager: " +
+                            (manager?.name
+                                ?: "geen beschikbaar"),
+                        modifier = Modifier.weight(1f)
+                    )
+
+                    OutlinedButton(
+                        enabled =
+                            candidates.size > 1,
+                        onClick = {
+                            managerIndex =
+                                (managerIndex + 1) %
+                                    candidates.size
+                        }
+                    ) {
+                        Text("Volgende")
+                    }
+                }
+
+                Button(
+                    enabled =
+                        source != null &&
+                            manager != null,
+                    onClick = {
+                        val src = source
+                        val mgr = manager
+
+                        if (src != null && mgr != null) {
+                            controller
+                                .borrowEmployeeFromLocation(
+                                    src.id,
+                                    mgr.id
+                                )
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Leen manager uit vestiging")
+                }
+            }
+
+            if (borrowed.isNotEmpty()) {
+                HorizontalDivider()
+
+                Text(
+                    "Actief geleend",
+                    fontWeight = FontWeight.Bold
+                )
+
+                borrowed.forEach { employee ->
+                    Row(
+                        verticalAlignment =
+                            Alignment.CenterVertically
+                    ) {
+                        Column(
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text(
+                                employee.name,
+                                fontWeight =
+                                    FontWeight.Bold
+                            )
+
+                            Text(
+                                "Van: " +
+                                    (
+                                        employee
+                                            .loanSourceLocationName
+                                            ?: "onbekend"
+                                    ),
+                                style =
+                                    MaterialTheme
+                                        .typography
+                                        .bodySmall
+                            )
+                        }
+
+                        OutlinedButton(
+                            onClick = {
+                                returningId =
+                                    employee.id
+                            }
+                        ) {
+                            Text("Terug")
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
