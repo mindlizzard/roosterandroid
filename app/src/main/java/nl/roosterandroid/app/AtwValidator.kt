@@ -30,32 +30,105 @@ class AtwValidator {
     }
 
     fun validate(state: AppState): List<Violation> {
-        if (!state.settings.atwEnabled) return emptyList()
-        val employees = state.employees.associateBy { it.id }
-        val templates = state.shiftTemplates.associateBy { it.id }
-        val allAssignments = (state.assignmentHistory + state.assignments).distinctBy { it.id }
+        val employees =
+            state.employees.associateBy { it.id }
 
-        val shifts = allAssignments.mapNotNull { a ->
-            val employee = employees[a.employeeId] ?: return@mapNotNull null
-            val template = templates[a.shiftTemplateId] ?: return@mapNotNull null
-            toScheduledShift(a, employee, template)
-        }.sortedBy { it.start }
+        val templates =
+            state.shiftTemplates.associateBy { it.id }
 
-        val out = mutableListOf<Violation>()
-        shifts.groupBy { it.employee.id }.forEach { (employeeId, employeeShifts) ->
-            val sorted = employeeShifts.sortedBy { it.start }
-            checkShiftLengthsAndBreaks(sorted, out)
-            checkOverlapAndDailyRest(sorted, state.settings, out)
+        val allAssignments =
+            (
+                state.assignmentHistory +
+                    state.assignments
+            ).distinctBy { it.id }
+
+        val shifts =
+            allAssignments.mapNotNull { assignment ->
+                val employee =
+                    employees[assignment.employeeId]
+                        ?: return@mapNotNull null
+
+                val template =
+                    templates[assignment.shiftTemplateId]
+                        ?: return@mapNotNull null
+
+                runCatching {
+                    toScheduledShift(
+                        assignment,
+                        employee,
+                        template
+                    )
+                }.getOrNull()
+            }.sortedBy { it.start }
+
+        val out =
+            mutableListOf<Violation>()
+
+        shifts.groupBy {
+            it.employee.id
+        }.forEach { (employeeId, employeeShifts) ->
+            val sorted =
+                employeeShifts.sortedBy { it.start }
+
+            // Overlap is geen optionele ATW-regel.
+            // Een medewerker kan nooit twee diensten tegelijk werken.
+            checkOverlapOnly(sorted, out)
+
+            if (!state.settings.atwEnabled) {
+                return@forEach
+            }
+
+            checkShiftLengthsAndBreaks(
+                sorted,
+                out
+            )
+
+            checkDailyRestWithoutOverlap(
+                sorted,
+                state.settings,
+                out
+            )
+
             checkWeeklyHours(sorted, out)
             checkRollingAverages(sorted, out)
             checkWeeklyRest(sorted, out)
-            checkNightRules(sorted, state.settings, out)
-            checkConsecutiveDays(sorted, state.settings, out)
-            checkSundayRest(sorted, state.settings, out)
-            checkHistoryCoverage(sorted, state, employeeId, out)
+
+            checkNightRules(
+                sorted,
+                state.settings,
+                out
+            )
+
+            checkConsecutiveDays(
+                sorted,
+                state.settings,
+                out
+            )
+
+            checkSundayRest(
+                sorted,
+                state.settings,
+                out
+            )
+
+            checkHistoryCoverage(
+                sorted,
+                state,
+                employeeId,
+                out
+            )
         }
-        return out.distinctBy { "${it.employeeId}|${it.date}|${it.rule}|${it.message}" }
-            .sortedWith(compareBy<Violation>({ it.date ?: LocalDate.MIN }, { it.severity.ordinal }))
+
+        return out
+            .distinctBy {
+                "${it.employeeId}|${it.date}|${it.rule}|${it.message}"
+            }
+            .sortedWith(
+                compareBy<Violation>(
+                    { it.date ?: LocalDate.MIN },
+                    { it.severity.ordinal }
+                )
+            )
     }
 
     fun canPlace(
@@ -65,33 +138,113 @@ class AtwValidator {
         existing: List<ScheduledShift>,
         settings: PlannerSettings
     ): Boolean {
-        if (!settings.atwEnabled) return true
+        val candidate =
+            toScheduledShift(
+                Assignment(
+                    employeeId = employee.id,
+                    date = date.toString(),
+                    shiftTemplateId = template.id
+                ),
+                employee,
+                template
+            )
 
-        val candidate = toScheduledShift(
-            Assignment(employeeId = employee.id, date = date.toString(), shiftTemplateId = template.id),
-            employee,
-            template
-        )
-        if (candidate.durationHours > 12.0) return false
-        if (existing.any { overlaps(it.start, it.end, candidate.start, candidate.end) }) return false
+        // Altijd blokkeren. Ook als ATW-controle uit staat.
+        if (
+            existing.any {
+                overlaps(
+                    it.start,
+                    it.end,
+                    candidate.start,
+                    candidate.end
+                )
+            }
+        ) {
+            return false
+        }
 
-        val relevant = (existing + candidate).sortedBy { it.start }
-        val idx = relevant.indexOf(candidate)
-        val prev = relevant.getOrNull(idx - 1)
-        val next = relevant.getOrNull(idx + 1)
-        val minRest = settings.strictDailyRestHours.toLong()
-        if (prev != null && Duration.between(prev.end, candidate.start).toHours() < minRest) return false
-        if (next != null && Duration.between(candidate.end, next.start).toHours() < minRest) return false
+        // ATW uit = wettelijke arbeidstijdregels overslaan,
+        // maar fysiek overlappende diensten blijven onmogelijk.
+        if (!settings.atwEnabled) {
+            return true
+        }
 
-        val monday = date.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
-        val sundayExclusive = monday.plusDays(7)
-        val weekHours = relevant.filter {
-            !it.start.toLocalDate().isBefore(monday) && it.start.toLocalDate().isBefore(sundayExclusive)
-        }.sumOf { it.durationHours }
-        if (weekHours > 60.0) return false
+        if (candidate.durationHours > 12.0) {
+            return false
+        }
 
-        val streak = consecutiveStreakIncluding(date, relevant)
-        if (settings.treatMaxConsecutiveDaysAsHardRule && streak > settings.maxConsecutiveWorkDays) return false
+        val relevant =
+            (existing + candidate)
+                .sortedBy { it.start }
+
+        val idx =
+            relevant.indexOf(candidate)
+
+        val prev =
+            relevant.getOrNull(idx - 1)
+
+        val next =
+            relevant.getOrNull(idx + 1)
+
+        val minRest =
+            settings.strictDailyRestHours
+                .toLong()
+
+        if (
+            prev != null &&
+            Duration.between(
+                prev.end,
+                candidate.start
+            ).toHours() < minRest
+        ) {
+            return false
+        }
+
+        if (
+            next != null &&
+            Duration.between(
+                candidate.end,
+                next.start
+            ).toHours() < minRest
+        ) {
+            return false
+        }
+
+        val monday =
+            date.with(
+                TemporalAdjusters.previousOrSame(
+                    DayOfWeek.MONDAY
+                )
+            )
+
+        val sundayExclusive =
+            monday.plusDays(7)
+
+        val weekHours =
+            relevant.filter {
+                !it.start.toLocalDate()
+                    .isBefore(monday) &&
+                    it.start.toLocalDate()
+                        .isBefore(sundayExclusive)
+            }.sumOf { it.durationHours }
+
+        if (weekHours > 60.0) {
+            return false
+        }
+
+        val streak =
+            consecutiveStreakIncluding(
+                date,
+                relevant
+            )
+
+        if (
+            settings.treatMaxConsecutiveDaysAsHardRule &&
+            streak > settings.maxConsecutiveWorkDays
+        ) {
+            return false
+        }
+
         return true
     }
 
@@ -116,37 +269,104 @@ class AtwValidator {
         }
     }
 
-    private fun checkOverlapAndDailyRest(
+    private fun checkOverlapOnly(
+        shifts: List<ScheduledShift>,
+        out: MutableList<Violation>
+    ) {
+        for (i in 0 until shifts.lastIndex) {
+            val first = shifts[i]
+            val second = shifts[i + 1]
+
+            if (
+                overlaps(
+                    first.start,
+                    first.end,
+                    second.start,
+                    second.end
+                )
+            ) {
+                out += Violation(
+                    Severity.ERROR,
+                    first.employee.id,
+                    second.date,
+                    "Overlap",
+                    "${first.employee.name}: twee diensten overlappen."
+                )
+            }
+        }
+    }
+
+    private fun checkDailyRestWithoutOverlap(
         shifts: List<ScheduledShift>,
         settings: PlannerSettings,
         out: MutableList<Violation>
     ) {
-        val reducedStarts = mutableListOf<LocalDateTime>()
+        val reducedStarts =
+            mutableListOf<LocalDateTime>()
+
         for (i in 0 until shifts.lastIndex) {
             val a = shifts[i]
             val b = shifts[i + 1]
-            if (overlaps(a.start, a.end, b.start, b.end)) {
-                out += Violation(Severity.ERROR, a.employee.id, b.date, "Overlap", "${a.employee.name}: twee diensten overlappen.")
+
+            if (
+                overlaps(
+                    a.start,
+                    a.end,
+                    b.start,
+                    b.end
+                )
+            ) {
                 continue
             }
-            val restMinutes = Duration.between(a.end, b.start).toMinutes()
-            val normalMin = settings.strictDailyRestHours * 60L
+
+            val restMinutes =
+                Duration.between(
+                    a.end,
+                    b.start
+                ).toMinutes()
+
+            val normalMin =
+                settings.strictDailyRestHours *
+                    60L
+
             if (restMinutes < normalMin) {
-                val previousReductionIn7Days = reducedStarts.any { prior ->
-                    !prior.isAfter(b.start) && Duration.between(prior, b.start).toHours() < 168
+                val previousReductionIn7Days =
+                    reducedStarts.any { prior ->
+                        !prior.isAfter(b.start) &&
+                            Duration.between(
+                                prior,
+                                b.start
+                            ).toHours() < 168
+                    }
+
+                val reductionPossible =
+                    settings.allowOneReducedDailyRestPer7Days &&
+                        restMinutes >= 8 * 60L &&
+                        !previousReductionIn7Days
+
+                if (reductionPossible) {
+                    reducedStarts += b.start
                 }
-                val reductionPossible = settings.allowOneReducedDailyRestPer7Days &&
-                    restMinutes >= 8 * 60L && !previousReductionIn7Days
-                if (reductionPossible) reducedStarts += b.start
+
                 out += Violation(
-                    if (reductionPossible) Severity.WARNING else Severity.ERROR,
+                    if (reductionPossible)
+                        Severity.WARNING
+                    else
+                        Severity.ERROR,
                     a.employee.id,
                     b.date,
                     "Dagelijkse rust",
                     if (reductionPossible) {
-                        "${a.employee.name}: rust is %.1f uur. Dit gebruikt de maximaal 1× per 7 dagen toegestane verkorting tot minimaal 8 uur; alleen gebruiken als het werk dit noodzakelijk maakt.".format(restMinutes / 60.0)
+                        "${a.employee.name}: rust is %.1f uur. Dit gebruikt de maximaal 1× per 7 dagen toegestane verkorting tot minimaal 8 uur; alleen gebruiken als het werk dit noodzakelijk maakt."
+                            .format(
+                                restMinutes / 60.0
+                            )
                     } else {
-                        "${a.employee.name}: slechts %.1f uur rust tussen diensten; minimaal %d uur, met hooguit 1 geldige verkorting per 7 dagen.".format(restMinutes / 60.0, settings.strictDailyRestHours)
+                        "${a.employee.name}: slechts %.1f uur rust tussen diensten; minimaal %d uur, met hooguit 1 geldige verkorting per 7 dagen."
+                            .format(
+                                restMinutes / 60.0,
+                                settings.strictDailyRestHours
+                            )
                     }
                 )
             }

@@ -1263,7 +1263,12 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
         val weekly = state.weeklyAvailability.lastOrNull {
             it.employeeId == employee.id && it.weekday == date.dayOfWeek.value
         }
-        val fixedKind = specific?.fixedShiftKind ?: weekly?.fixedShiftKind
+        val fixedKind =
+            if (specific != null) {
+                specific.fixedShiftKind
+            } else {
+                weekly?.fixedShiftKind
+            }
         if (fixedKind != null) {
             return templatesForKind(date, fixedKind, state)
         }
