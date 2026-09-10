@@ -19,7 +19,7 @@ import javax.swing.table.DefaultTableModel
 
 internal class TeamPanel(private val controller: DesktopController) : JPanel(BorderLayout()), Refreshable {
     private val employeeModel = readOnlyModel(
-        "Naam", "Rol", "Dagen", "Uren", "Max/week", "Setup", "Dag", "Tussen", "Sluit", "Actief"
+        "Naam", "Rol", "Bron", "Dagen", "Uren", "Max/week", "Setup", "Dag", "Tussen", "Sluit", "Actief"
     )
     private val employeeTable = configuredTable(employeeModel)
     private val weeklyModel = readOnlyModel("Dag", "Beschikbaar", "Vanaf", "Tot", "Vaste dienst")
@@ -34,6 +34,7 @@ internal class TeamPanel(private val controller: DesktopController) : JPanel(Bor
         val toolbar = JPanel(FlowLayout(FlowLayout.LEFT, 8, 4)).apply {
             add(panelTitle("Team en beschikbaarheid"))
             add(primaryButton("Medewerker toevoegen") { addEmployee() })
+            add(primaryButton("Leenmanager uit vestiging") { addBorrowedManager() })
             add(secondaryButton("Wijzigen") { editEmployee() })
             add(secondaryButton("Uit dienst / verwijderen") { removeEmployee() })
         }
@@ -105,6 +106,7 @@ internal class TeamPanel(private val controller: DesktopController) : JPanel(Bor
             employeeModel.addRow(arrayOf(
                 employee.name,
                 roleLabel(employee.role),
+                employee.loanSourceLocationName.orEmpty(),
                 employee.contractedDaysPerWeek,
                 "%.1f".format(employee.contractedHoursPerWeek),
                 employee.maxShiftsPerWeek,
@@ -157,7 +159,68 @@ internal class TeamPanel(private val controller: DesktopController) : JPanel(Bor
     }
 
     private fun addEmployee() {
-        DesktopDialogs.employee(this)?.let(controller::addEmployee)
+        DesktopDialogs.employee(this)
+            ?.let(controller::addEmployee)
+    }
+
+    private fun addBorrowedManager() {
+        val choices =
+            controller.workspace.locations
+                .asSequence()
+                .filter {
+                    it.id !=
+                        controller.activeLocation.id
+                }
+                .flatMap { location ->
+                    location.state.employees
+                        .asSequence()
+                        .filter {
+                            it.active &&
+                                it.role !=
+                                    nl.roosterandroid.app.EmployeeRole.HOST &&
+                                it.role !=
+                                    nl.roosterandroid.app.EmployeeRole.BORROWED
+                        }
+                        .map { employee ->
+                            BorrowManagerChoice(
+                                locationId =
+                                    location.id,
+                                employeeId =
+                                    employee.id,
+                                label =
+                                    "${employee.name} • ${location.name}"
+                            )
+                        }
+                }
+                .sortedBy {
+                    it.label.lowercase()
+                }
+                .toList()
+
+        if (choices.isEmpty()) {
+            controller.showStatus(
+                "Geen actieve managers gevonden in andere vestigingen"
+            )
+            return
+        }
+
+        val choice =
+            JOptionPane.showInputDialog(
+                this,
+                "Kies een manager uit een andere vestiging.\n" +
+                    "Er wordt een losse lokale leenmanager gemaakt.",
+                "Leenmanager toevoegen",
+                JOptionPane.PLAIN_MESSAGE,
+                null,
+                choices.toTypedArray(),
+                choices.first()
+            ) as? BorrowManagerChoice
+                ?: return
+
+        controller.borrowEmployeeFromLocation(
+            choice.locationId,
+            choice.employeeId
+        )
     }
 
     private fun editEmployee() {
@@ -274,4 +337,13 @@ internal class TeamPanel(private val controller: DesktopController) : JPanel(Bor
 
 private fun readOnlyModel(vararg columns: String): DefaultTableModel = object : DefaultTableModel(columns, 0) {
     override fun isCellEditable(row: Int, column: Int): Boolean = false
+}
+
+
+private data class BorrowManagerChoice(
+    val locationId: String,
+    val employeeId: String,
+    val label: String
+) {
+    override fun toString(): String = label
 }

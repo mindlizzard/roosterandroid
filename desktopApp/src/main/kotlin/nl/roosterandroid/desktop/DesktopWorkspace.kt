@@ -15,7 +15,7 @@ data class LocationWorkspace(
 
 @Serializable
 data class DesktopWorkspace(
-    val schemaVersion: Int = 10,
+    val schemaVersion: Int = 12,
     val activeLocationId: String,
     val locations: List<LocationWorkspace>,
     val lastSavedAt: String = LocalDateTime.now().toString()

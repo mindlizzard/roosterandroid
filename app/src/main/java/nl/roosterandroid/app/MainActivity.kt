@@ -90,7 +90,9 @@ class AppController(private val storage: ScheduleStorage) {
         private set
     var plannerWarnings by mutableStateOf(emptyList<String>())
         private set
-    var status by mutableStateOf<String?>(null)
+    var status by mutableStateOf<String?>(
+        storage.lastLoadNotice
+    )
         private set
     var scenarioSummaries by mutableStateOf(emptyList<String>())
         private set

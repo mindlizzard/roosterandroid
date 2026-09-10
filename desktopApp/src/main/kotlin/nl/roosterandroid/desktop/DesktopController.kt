@@ -24,6 +24,8 @@ import nl.roosterandroid.app.SmartShiftTemplates
 import nl.roosterandroid.app.WeeklyAvailability
 import nl.roosterandroid.app.allowsShiftOn
 import nl.roosterandroid.app.canWork
+import nl.roosterandroid.app.countsAsManager
+import nl.roosterandroid.app.isExperiencedManager
 import java.nio.file.Path
 import java.time.DayOfWeek
 import java.time.LocalDate
@@ -200,7 +202,97 @@ class DesktopController(private val storage: DesktopStorage) {
     }
 
     fun addEmployee(employee: Employee) {
-        commitActive(state.copy(employees = state.employees + employee), "${employee.name} toegevoegd")
+        commitActive(
+            state.copy(
+                employees = state.employees + employee
+            ),
+            "${employee.name} toegevoegd"
+        )
+    }
+
+    fun borrowEmployeeFromLocation(
+        sourceLocationId: String,
+        sourceEmployeeId: String
+    ): Boolean {
+        val sourceLocation =
+            workspace.locations.firstOrNull {
+                it.id == sourceLocationId
+            }
+
+        if (
+            sourceLocation == null ||
+            sourceLocation.id ==
+                activeLocation.id
+        ) {
+            showStatus(
+                "Bronvestiging niet gevonden"
+            )
+            return false
+        }
+
+        val sourceEmployee =
+            sourceLocation.state.employees
+                .firstOrNull {
+                    it.id == sourceEmployeeId &&
+                        it.active &&
+                        it.countsAsManager() &&
+                        it.role !=
+                            EmployeeRole.BORROWED
+                }
+
+        if (sourceEmployee == null) {
+            showStatus(
+                "Manager niet beschikbaar om te lenen"
+            )
+            return false
+        }
+
+        val alreadyPresent =
+            state.employees.any {
+                it.active &&
+                    it.role ==
+                        EmployeeRole.BORROWED &&
+                    it.loanSourceLocationId ==
+                        sourceLocation.id &&
+                    it.loanSourceEmployeeId ==
+                        sourceEmployee.id
+            }
+
+        if (alreadyPresent) {
+            showStatus(
+                "${sourceEmployee.name} staat al als leenmanager in ${activeLocation.name}"
+            )
+            return false
+        }
+
+        val borrowed =
+            sourceEmployee.copy(
+                id =
+                    UUID.randomUUID()
+                        .toString(),
+                role =
+                    EmployeeRole.BORROWED,
+                loanSourceLocationId =
+                    sourceLocation.id,
+                loanSourceEmployeeId =
+                    sourceEmployee.id,
+                loanSourceLocationName =
+                    sourceLocation.name,
+                contractedDaysPerWeek = 0,
+                contractedHoursPerWeek = 0.0,
+                maxShiftsPerWeek = 3,
+                active = true
+            )
+
+        commitActive(
+            state.copy(
+                employees =
+                    state.employees + borrowed
+            ),
+            "${borrowed.name} geleend van ${sourceLocation.name}"
+        )
+
+        return true
     }
 
     fun updateEmployee(employee: Employee) {
@@ -359,7 +451,35 @@ class DesktopController(private val storage: DesktopStorage) {
                             .filter { it.severity == AtwValidator.Severity.ERROR && it.employeeId == candidate.id }
                             .none { violationKey(it) !in baseline }
                     }
-                    .minByOrNull { monthlyShiftCount(it.id, proposed) }
+                    .sortedWith(
+                        compareBy<Employee>(
+                            {
+                                if (it.isExperiencedManager())
+                                    0
+                                else
+                                    1
+                            },
+                            {
+                                if (
+                                    state.settings.minimizeBorrowedManagers &&
+                                    it.role == EmployeeRole.BORROWED
+                                )
+                                    1
+                                else
+                                    0
+                            },
+                            {
+                                monthlyShiftCount(
+                                    it.id,
+                                    proposed
+                                )
+                            },
+                            {
+                                it.name.lowercase()
+                            }
+                        )
+                    )
+                    .firstOrNull()
 
                 if (replacement != null) {
                     proposed = proposed.copy(

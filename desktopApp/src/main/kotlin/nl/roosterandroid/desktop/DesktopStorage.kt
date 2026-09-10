@@ -157,16 +157,26 @@ class DesktopStorage(baseDirectory: Path? = null) {
 
     private fun decodeWorkspace(
         raw: String
-    ): DesktopWorkspace =
-        runCatching {
-            json.decodeFromString<DesktopWorkspace>(
-                raw
-            )
-        }.getOrElse {
-            DesktopWorkspace.fromAppState(
-                json.decodeFromString<AppState>(raw)
-            )
+    ): DesktopWorkspace {
+        val decoded =
+            runCatching {
+                json.decodeFromString<DesktopWorkspace>(
+                    raw
+                )
+            }.getOrElse {
+                DesktopWorkspace.fromAppState(
+                    json.decodeFromString<AppState>(
+                        raw
+                    )
+                )
+            }
+
+        return if (decoded.schemaVersion < 12) {
+            decoded.copy(schemaVersion = 12)
+        } else {
+            decoded
         }
+    }
 
     private fun newestValidBackup():
         Pair<Path, DesktopWorkspace>? {
