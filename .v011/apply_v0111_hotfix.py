@@ -93,6 +93,8 @@ def insert_before_class_end(text: str, class_marker: str, code: str) -> str:
     if code.strip().splitlines()[0].strip() in text:
         return text
     cls = text.find(class_marker)
+    if cls < 0 and class_marker.startswith('internal class '):
+        cls = text.find(class_marker.replace('internal ', '', 1))
     if cls < 0: raise SystemExit(f'❌ Class marker niet gevonden: {class_marker}')
     open_idx = text.find('{', cls)
     end = matching_brace(text, open_idx)
@@ -316,7 +318,7 @@ controller_methods = '''    fun removeTemplate(templateId: String) {
     }
 '''
 if 'fun removeTemplate(templateId: String)' not in s:
-    s = insert_before_class_end(s, 'internal class DesktopController', controller_methods)
+    s = insert_before_class_end(s, 'class DesktopController', controller_methods)
 
 manual_fun = '''    fun setManualAssignment(employeeId: String, date: String, templateId: String?) {
         val without = state.assignments.filterNot {
@@ -421,7 +423,7 @@ methods = '''    private data class TemplateChoice(val template: ShiftTemplate) 
     }
 '''
 if 'private fun chooseTemplate(title: String)' not in s:
-    s = insert_before_class_end(s, 'internal class RulesPanel', methods)
+    s = insert_before_class_end(s, 'class RulesPanel', methods)
 write(rel, s)
 
 # 7) SchedulePanel: expliciete handmatige diensteditor. Geen beschikbaarheid meer verwarren met de echte dienst.
@@ -430,7 +432,7 @@ s = read(rel)
 s = add_import(s, 'import java.awt.FlowLayout')
 s = add_import(s, 'import javax.swing.JPanel')
 if 'ManualScheduleEditor.open(' not in s:
-    cls = s.find('internal class SchedulePanel')
+    cls = s.find('class SchedulePanel')
     if cls < 0: raise SystemExit('❌ SchedulePanel class niet gevonden')
     init_idx = s.find('    init {', cls)
     if init_idx < 0: raise SystemExit('❌ SchedulePanel init niet gevonden')
