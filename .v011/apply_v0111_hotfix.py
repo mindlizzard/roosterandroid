@@ -360,7 +360,17 @@ manual_fun = '''    fun setManualAssignment(employeeId: String, date: String, te
         }
         commitActive(proposed, "Handmatige dienst opgeslagen")
     }'''
-s = replace_function(s, '    fun setManualAssignment(employeeId: String, date: String, templateId: String?)', manual_fun, 'setManualAssignment')
+if 'fun setManualAssignment(employeeId: String, date: String, templateId: String?)' in s:
+    s = replace_function(
+        s,
+        '    fun setManualAssignment(employeeId: String, date: String, templateId: String?)',
+        manual_fun,
+        'setManualAssignment'
+    )
+else:
+    # Sommige desktop-baselines hebben deze API nog niet. Voeg hem dan toe
+    # in plaats van de hele hotfix te laten stoppen.
+    s = insert_before_class_end(s, 'class DesktopController', manual_fun)
 write(rel, s)
 
 # 6) RulesPanel: actieve templates tonen en echte edit/remove knoppen toevoegen.
