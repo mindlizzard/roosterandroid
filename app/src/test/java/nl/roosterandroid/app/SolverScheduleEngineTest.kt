@@ -491,4 +491,36 @@ class SolverScheduleEngineTest {
             it.employeeId == employee.id && it.date == "2026-06-01"
         })
     }
+
+    @Test
+    fun disablingAtwReallyDisablesAtwPlacementLimits() {
+        val employee =
+            Employee(name = "A")
+
+        val veryLongShift =
+            ShiftTemplate(
+                id = "long",
+                name = "Lange testdienst",
+                kind = ShiftKind.CUSTOM,
+                start = "08:00",
+                end = "22:00"
+            )
+
+        val validator = AtwValidator()
+
+        assertTrue(
+            validator.canPlace(
+                employee = employee,
+                date = java.time.LocalDate.parse(
+                    "2026-09-07"
+                ),
+                template = veryLongShift,
+                existing = emptyList(),
+                settings = PlannerSettings(
+                    atwEnabled = false
+                )
+            )
+        )
+    }
+
 }

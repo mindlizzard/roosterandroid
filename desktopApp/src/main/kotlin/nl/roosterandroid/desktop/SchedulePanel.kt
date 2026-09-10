@@ -87,21 +87,7 @@ internal class SchedulePanel(private val controller: DesktopController) : JPanel
         add(hint.apply { border = EmptyBorder(8, 4, 0, 4) }, BorderLayout.SOUTH)
         refresh()
     
-        // v0.11.1: beschikbaarheid is alleen een venster; de echte dienst blijft apart wijzigbaar.
-        run {
-            val border = layout as? java.awt.BorderLayout
-            val previousNorth = border?.getLayoutComponent(java.awt.BorderLayout.NORTH) as? java.awt.Component
-            if (previousNorth != null) remove(previousNorth)
-            val wrapper = JPanel(java.awt.BorderLayout()).apply {
-                if (previousNorth != null) add(previousNorth, java.awt.BorderLayout.CENTER)
-                add(JPanel(FlowLayout(FlowLayout.LEFT, 8, 4)).apply {
-                    add(secondaryButton("Dienst aanpassen") {
-                        ManualScheduleEditor.open(this@SchedulePanel, controller)
-                    })
-                }, java.awt.BorderLayout.SOUTH)
-            }
-            add(wrapper, java.awt.BorderLayout.NORTH)
-        }
+
 }
 
     override fun refresh() {
@@ -127,20 +113,31 @@ internal class SchedulePanel(private val controller: DesktopController) : JPanel
     private fun editSelectedCell() {
         val viewRow = table.selectedRow
         val viewColumn = table.selectedColumn
+
         if (viewRow < 0 || viewColumn < 0) {
-            controller.showStatus("Selecteer eerst een dienstvak")
+            controller.showStatus("Selecteer eerst een rooster-vak")
             return
         }
+
         val row = table.convertRowIndexToModel(viewRow)
         val column = table.convertColumnIndexToModel(viewColumn)
         val date = model.dateAt(row)
+
         when {
-            column == 0 -> controller.showStatus("Kies een medewerkerkolom")
-            column == model.columnCount - 1 -> editNote(date)
+            column == 0 ->
+                controller.showStatus("Kies een medewerkerkolom")
+
+            column == model.columnCount - 1 ->
+                editNote(date)
+
             else -> {
                 val employee = model.employeeAt(column - 1) ?: return
-                val choice = DesktopDialogs.assignment(this, controller.state, employee, date) ?: return
-                controller.setManualAssignment(employee.id, date, choice.id)
+                ManualScheduleEditor.open(
+                    this,
+                    controller,
+                    employee,
+                    date
+                )
             }
         }
     }
@@ -279,8 +276,16 @@ private class ScheduleTableModel(private val controller: DesktopController) : Ab
     private var dates: List<LocalDate> = emptyList()
 
     fun refresh() {
-        employees = controller.state.employees.filter { it.active }
-        val ym = YearMonth.of(controller.state.year, controller.state.month)
+        val state = controller.state
+        val assignedIds = state.assignments
+            .map { it.employeeId }
+            .toSet()
+
+        employees = state.employees.filter {
+            it.active || it.id in assignedIds
+        }
+
+        val ym = YearMonth.of(state.year, state.month)
         dates = (1..ym.lengthOfMonth()).map(ym::atDay)
         fireTableStructureChanged()
     }

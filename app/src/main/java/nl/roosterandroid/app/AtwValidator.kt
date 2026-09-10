@@ -65,6 +65,8 @@ class AtwValidator {
         existing: List<ScheduledShift>,
         settings: PlannerSettings
     ): Boolean {
+        if (!settings.atwEnabled) return true
+
         val candidate = toScheduledShift(
             Assignment(employeeId = employee.id, date = date.toString(), shiftTemplateId = template.id),
             employee,

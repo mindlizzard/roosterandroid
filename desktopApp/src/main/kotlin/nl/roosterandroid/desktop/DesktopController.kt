@@ -211,19 +211,45 @@ class DesktopController(private val storage: DesktopStorage) {
     }
 
     fun removeEmployee(id: String) {
-        val employee = state.employees.firstOrNull { it.id == id }
+        val employee = state.employees
+            .firstOrNull { it.id == id }
+            ?: return
+
+        val referenced =
+            (state.assignments + state.assignmentHistory)
+                .any { it.employeeId == id }
+
+        if (referenced) {
+            commitActive(
+                state.copy(
+                    employees = state.employees.map {
+                        if (it.id == id)
+                            it.copy(active = false)
+                        else
+                            it
+                    }
+                ),
+                "${employee.name} gedeactiveerd • roosterhistorie behouden"
+            )
+            return
+        }
+
         commitActive(
             state.copy(
-                employees = state.employees.filterNot { it.id == id },
-                assignments = state.assignments.filterNot { it.employeeId == id },
-                assignmentHistory = state.assignmentHistory.filterNot { it.employeeId == id },
-                availability = state.availability.filterNot { it.employeeId == id },
-                weeklyAvailability = state.weeklyAvailability.filterNot { it.employeeId == id },
-                absences = state.absences.filterNot { it.employeeId == id },
-                responsibilities = state.responsibilities.filterNot { it.employeeId == id },
-                personMarkers = state.personMarkers.filterNot { it.employeeId == id }
+                employees = state.employees
+                    .filterNot { it.id == id },
+                availability = state.availability
+                    .filterNot { it.employeeId == id },
+                weeklyAvailability = state.weeklyAvailability
+                    .filterNot { it.employeeId == id },
+                absences = state.absences
+                    .filterNot { it.employeeId == id },
+                responsibilities = state.responsibilities
+                    .filterNot { it.employeeId == id },
+                personMarkers = state.personMarkers
+                    .filterNot { it.employeeId == id }
             ),
-            "${employee?.name ?: "Medewerker"} verwijderd"
+            "${employee.name} verwijderd"
         )
     }
 
@@ -409,42 +435,93 @@ class DesktopController(private val storage: DesktopStorage) {
     }
 
     fun alignClosingTemplatesWithOperatingHours() {
-        val activeHours = state.operatingHours.filterNot { it.closed || it.isTwentyFourHours() }
+        val activeHours = state.operatingHours
+            .filterNot {
+                it.closed || it.isTwentyFourHours()
+            }
+
         if (activeHours.isEmpty()) {
-            showStatus("Geen sluitmomenten: 24/7-dagen hebben geen sluitdienst nodig")
+            showStatus(
+                "Geen sluitmomenten: 24/7-dagen hebben geen sluitdienst nodig"
+            )
             return
         }
-        val newCloseTemplates = activeHours.groupBy { it.close }.map { (close, rules) ->
-            val end = LocalTime.parse(close)
-            val start = end.minusHours(8)
-            val dayLabel = rules.map { dayShort(it.weekday) }.joinToString("/")
-            ShiftTemplate(
-                name = "Sluit $dayLabel",
-                kind = ShiftKind.CLOSE,
-                start = start.toString(),
-                end = end.toString(),
-                enabledWeekdays = rules.map { it.weekday }.toSet()
-            )
+
+        val newCloseTemplates =
+            activeHours
+                .groupBy { it.close }
+                .map { (close, rules) ->
+                    val end = LocalTime.parse(close)
+                    val start = end.minusHours(8)
+
+                    val dayLabel = rules
+                        .map { dayShort(it.weekday) }
+                        .joinToString("/")
+
+                    ShiftTemplate(
+                        name = "Sluit $dayLabel",
+                        kind = ShiftKind.CLOSE,
+                        start = start.toString(),
+                        end = end.toString(),
+                        enabledWeekdays =
+                            rules.map { it.weekday }.toSet()
+                    )
+                }
+
+        val oldCloseTemplates =
+            state.shiftTemplates.filter {
+                it.kind == ShiftKind.CLOSE &&
+                    !it.archived
+            }
+
+        val oldCloseIds =
+            oldCloseTemplates.map { it.id }.toSet()
+
+        fun replacementFor(
+            assignment: Assignment
+        ): ShiftTemplate? {
+            if (
+                assignment.shiftTemplateId !in oldCloseIds
+            ) {
+                return null
+            }
+
+            val date = runCatching {
+                LocalDate.parse(assignment.date)
+            }.getOrNull() ?: return null
+
+            return newCloseTemplates.firstOrNull {
+                date.dayOfWeek.value in
+                    it.enabledWeekdays
+            }
         }
-        val oldCloseIds = state.shiftTemplates.filter { it.kind == ShiftKind.CLOSE }.map { it.id }.toSet()
-        fun replacementFor(assignment: Assignment): ShiftTemplate? {
-            if (assignment.shiftTemplateId !in oldCloseIds) return null
-            val date = runCatching { LocalDate.parse(assignment.date) }.getOrNull() ?: return null
-            return newCloseTemplates.firstOrNull { date.dayOfWeek.value in it.enabledWeekdays }
-        }
-        val remappedCurrent = state.assignments.map { assignment ->
-            replacementFor(assignment)?.let { assignment.copy(shiftTemplateId = it.id) } ?: assignment
-        }
-        val remappedHistory = state.assignmentHistory.map { assignment ->
-            replacementFor(assignment)?.let { assignment.copy(shiftTemplateId = it.id) } ?: assignment
-        }
+
+        val remappedCurrent =
+            state.assignments.map { assignment ->
+                replacementFor(assignment)?.let {
+                    assignment.copy(
+                        shiftTemplateId = it.id
+                    )
+                } ?: assignment
+            }
+
+        val templatesWithArchive =
+            state.shiftTemplates.map { template ->
+                if (template.id in oldCloseIds) {
+                    template.copy(archived = true)
+                } else {
+                    template
+                }
+            } + newCloseTemplates
+
         commitActive(
             state.copy(
-                shiftTemplates = state.shiftTemplates.filterNot { it.kind == ShiftKind.CLOSE } + newCloseTemplates,
+                shiftTemplates = templatesWithArchive,
                 assignments = remappedCurrent,
-                assignmentHistory = remappedHistory
+                assignmentHistory =
+                    state.assignmentHistory
             ),
-            "Sluitdiensten bijgewerkt vanuit restauranttijden"
+            "Sluitdiensten bijgewerkt • oude roosterhistorie ongewijzigd"
         )
     }
 
@@ -582,30 +659,91 @@ class DesktopController(private val storage: DesktopStorage) {
         if (state.settings.autoFixAfterManualChanges) autoFix()
     }
 
-    fun swapAssignments(firstId: String, secondId: String) {
+    fun swapAssignments(
+        firstId: String,
+        secondId: String
+    ) {
         if (firstId == secondId) {
-            showStatus("Kies twee verschillende diensten")
+            showStatus(
+                "Kies twee verschillende diensten"
+            )
             return
         }
-        val first = state.assignments.firstOrNull { it.id == firstId }
-        val second = state.assignments.firstOrNull { it.id == secondId }
-        if (first == null || second == null || first.employeeId == second.employeeId) {
-            showStatus("Deze diensten kunnen niet worden geruild")
+
+        val first =
+            state.assignments.firstOrNull {
+                it.id == firstId
+            }
+
+        val second =
+            state.assignments.firstOrNull {
+                it.id == secondId
+            }
+
+        if (
+            first == null ||
+            second == null ||
+            first.employeeId == second.employeeId
+        ) {
+            showStatus(
+                "Deze diensten kunnen niet worden geruild"
+            )
             return
         }
-        val firstDate = LocalDate.parse(first.date)
-        val secondDate = LocalDate.parse(second.date)
-        manualBlockReason(second.employeeId, firstDate, first.shiftTemplateId, state)?.let {
+
+        val firstDate = runCatching {
+            LocalDate.parse(first.date)
+        }.getOrNull()
+
+        val secondDate = runCatching {
+            LocalDate.parse(second.date)
+        }.getOrNull()
+
+        if (firstDate == null || secondDate == null) {
+            showStatus(
+                "Ruil niet mogelijk: ongeldige datum"
+            )
+            return
+        }
+
+        manualBlockReason(
+            second.employeeId,
+            firstDate,
+            first.shiftTemplateId,
+            state
+        )?.let {
             showStatus("Ruil niet mogelijk: $it")
             return
         }
-        manualBlockReason(first.employeeId, secondDate, second.shiftTemplateId, state)?.let {
+
+        manualBlockReason(
+            first.employeeId,
+            secondDate,
+            second.shiftTemplateId,
+            state
+        )?.let {
             showStatus("Ruil niet mogelijk: $it")
             return
         }
-        val swappedFirst = first.copy(employeeId = second.employeeId, source = "manual-swap")
-        val swappedSecond = second.copy(employeeId = first.employeeId, source = "manual-swap")
-        val keep = state.assignments.filterNot { it.id == first.id || it.id == second.id }
+
+        val swappedFirst =
+            first.copy(
+                employeeId = second.employeeId,
+                source = "manual-swap"
+            )
+
+        val swappedSecond =
+            second.copy(
+                employeeId = first.employeeId,
+                source = "manual-swap"
+            )
+
+        val keep =
+            state.assignments.filterNot {
+                it.id == first.id ||
+                    it.id == second.id
+            }
+
         val record = ShiftSwapRecord(
             firstAssignmentId = first.id,
             secondAssignmentId = second.id,
@@ -613,11 +751,55 @@ class DesktopController(private val storage: DesktopStorage) {
             secondEmployeeId = second.employeeId,
             firstDate = first.date,
             secondDate = second.date,
-            createdAt = LocalDateTime.now().toString()
+            createdAt = LocalDateTime.now()
+                .toString()
         )
+
+        val proposed = state.copy(
+            assignments =
+                keep + swappedFirst + swappedSecond,
+            swapHistory =
+                state.swapHistory + record
+        )
+
+        val involvedEmployees =
+            setOf(
+                first.employeeId,
+                second.employeeId
+            )
+
+        val baselineErrors =
+            validator.validate(state)
+                .filter {
+                    it.severity ==
+                        AtwValidator.Severity.ERROR &&
+                        it.employeeId in involvedEmployees
+                }
+                .map(::violationKey)
+                .toSet()
+
+        val introducedErrors =
+            validator.validate(proposed)
+                .filter {
+                    it.severity ==
+                        AtwValidator.Severity.ERROR &&
+                        it.employeeId in involvedEmployees
+                }
+                .filter {
+                    violationKey(it) !in baselineErrors
+                }
+
+        if (introducedErrors.isNotEmpty()) {
+            showStatus(
+                "Ruil niet mogelijk: " +
+                    introducedErrors.first().message
+            )
+            return
+        }
+
         commitActive(
-            state.copy(assignments = keep + swappedFirst + swappedSecond, swapHistory = state.swapHistory + record),
-            "Diensten geruild • Auto-fix kan de rest opnieuw leggen"
+            proposed,
+            "Diensten veilig geruild"
         )
     }
 
@@ -665,7 +847,9 @@ class DesktopController(private val storage: DesktopStorage) {
             state.copy(
                 assignments = emptyList(),
                 assignmentHistory = emptyList(),
+                availability = emptyList(),
                 absences = emptyList(),
+                personMarkers = emptyList(),
                 dayNotes = emptyList(),
                 dayDemands = emptyList(),
                 dayPartDemands = emptyList(),
@@ -771,48 +955,149 @@ class DesktopController(private val storage: DesktopStorage) {
         templateId: String,
         base: AppState
     ): String? {
-        val employee = base.employees.firstOrNull { it.id == employeeId } ?: return "medewerker niet gevonden"
-        val template = base.shiftTemplates.firstOrNull { it.id == templateId } ?: return "dienst niet gevonden"
-        if (!employee.active) return "${employee.name} is niet actief"
-        if (!employee.canWork(template.kind)) return "${employee.name} mag deze dienst niet werken"
-        if (date.dayOfWeek.value !in template.enabledWeekdays) return "dienst is niet actief op deze weekdag"
+        val employee =
+            base.employees.firstOrNull {
+                it.id == employeeId
+            } ?: return "medewerker niet gevonden"
+
+        val template =
+            base.shiftTemplates.firstOrNull {
+                it.id == templateId
+            } ?: return "dienst niet gevonden"
+
+        if (!employee.active) {
+            return "${employee.name} is niet actief"
+        }
+
+        if (!employee.canWork(template.kind)) {
+            return "${employee.name} mag deze dienst niet werken"
+        }
+
+        if (
+            date.dayOfWeek.value !in
+            template.enabledWeekdays
+        ) {
+            return "dienst is niet actief op deze weekdag"
+        }
+
         if (!base.allowsShiftOn(date, template)) {
-            val hours = base.operatingHours.lastOrNull { it.weekday == date.dayOfWeek.value }
+            val hours =
+                base.operatingHours.lastOrNull {
+                    it.weekday ==
+                        date.dayOfWeek.value
+                }
+
             return if (hours?.closed == true) {
                 "de locatie is op deze weekdag gesloten"
             } else {
                 "dienst valt buiten de restauranttijden"
             }
         }
-        base.absences.firstOrNull {
-            it.employeeId == employeeId && it.status == AbsenceStatus.APPROVED && it.includes(date)
-        }?.let { return "${employee.name} is afwezig (${it.type.name.lowercase()})" }
 
-        val specific = base.availability.lastOrNull {
-            it.employeeId == employeeId && it.date == date.toString()
+        base.absences.firstOrNull {
+            it.employeeId == employeeId &&
+                it.status ==
+                    AbsenceStatus.APPROVED &&
+                it.includes(date)
+        }?.let {
+            return "${employee.name} is afwezig (${it.type.name.lowercase()})"
         }
-        val weekly = base.weeklyAvailability.lastOrNull {
-            it.employeeId == employeeId && it.weekday == date.dayOfWeek.value
+
+        val specific =
+            base.availability.lastOrNull {
+                it.employeeId == employeeId &&
+                    it.date == date.toString()
+            }
+
+        val weekly =
+            base.weeklyAvailability.lastOrNull {
+                it.employeeId == employeeId &&
+                    it.weekday ==
+                        date.dayOfWeek.value
+            }
+
+        val available =
+            if (specific != null) {
+                specific.available
+            } else {
+                weekly?.available ?: true
+            }
+
+        if (!available) {
+            return "${employee.name} is niet beschikbaar"
         }
-        val available = specific?.available ?: weekly?.available ?: true
-        if (!available) return "${employee.name} is niet beschikbaar"
-        val fixedKind = specific?.fixedShiftKind ?: weekly?.fixedShiftKind
-        if (fixedKind != null && fixedKind != template.kind) return "er staat een andere vaste dienst ingesteld"
-        val earliest = (specific?.earliestStart ?: weekly?.earliestStart)?.let {
-            runCatching { LocalTime.parse(it) }.getOrNull()
+
+        val fixedKind =
+            if (specific != null) {
+                specific.fixedShiftKind
+            } else {
+                weekly?.fixedShiftKind
+            }
+
+        if (
+            fixedKind != null &&
+            fixedKind != template.kind
+        ) {
+            return "er staat een andere vaste dienst ingesteld"
         }
-        val latest = (specific?.latestEnd ?: weekly?.latestEnd)?.let {
-            runCatching { LocalTime.parse(it) }.getOrNull()
+
+        val earliestText =
+            if (specific != null) {
+                specific.earliestStart
+            } else {
+                weekly?.earliestStart
+            }
+
+        val latestText =
+            if (specific != null) {
+                specific.latestEnd
+            } else {
+                weekly?.latestEnd
+            }
+
+        val earliest = earliestText?.let {
+            runCatching {
+                LocalTime.parse(it)
+            }.getOrNull()
         }
-        if (earliest != null && template.startTime().isBefore(earliest)) return "dienst begint vóór beschikbaarheid"
+
+        val latest = latestText?.let {
+            runCatching {
+                LocalTime.parse(it)
+            }.getOrNull()
+        }
+
+        if (
+            earliest != null &&
+            template.startTime().isBefore(earliest)
+        ) {
+            return "dienst begint vóór beschikbaarheid"
+        }
+
         if (latest != null) {
-            val start = date.atTime(template.startTime())
-            var end = date.atTime(template.endTime())
-            if (!end.isAfter(start)) end = end.plusDays(1)
-            var latestEnd = date.atTime(latest)
-            if (!latestEnd.isAfter(start)) latestEnd = latestEnd.plusDays(1)
-            if (end.isAfter(latestEnd)) return "dienst eindigt na beschikbaarheid"
+            val start =
+                date.atTime(template.startTime())
+
+            var end =
+                date.atTime(template.endTime())
+
+            if (!end.isAfter(start)) {
+                end = end.plusDays(1)
+            }
+
+            var latestEnd =
+                date.atTime(latest)
+
+            if (!latestEnd.isAfter(start)) {
+                latestEnd =
+                    latestEnd.plusDays(1)
+            }
+
+            if (end.isAfter(latestEnd)) {
+                return "dienst eindigt na beschikbaarheid"
+            }
         }
+
         return null
     }
 
@@ -884,38 +1169,114 @@ class DesktopController(private val storage: DesktopStorage) {
         end: String,
         kind: ShiftKind
     ) {
-        val parsed = runCatching { LocalDate.parse(date) }.getOrNull()
+        val parsed = runCatching {
+            LocalDate.parse(date)
+        }.getOrNull()
+
         if (parsed == null) {
             showStatus("Ongeldige datum")
             return
         }
 
-        val existing = state.shiftTemplates.firstOrNull {
-            !it.archived &&
-                !it.autoGenerated &&
-                it.kind == kind &&
-                it.start == start &&
-                it.end == end &&
-                parsed.dayOfWeek.value in it.enabledWeekdays
+        val existing =
+            state.shiftTemplates.firstOrNull {
+                !it.archived &&
+                    !it.autoGenerated &&
+                    it.kind == kind &&
+                    it.start == start &&
+                    it.end == end &&
+                    parsed.dayOfWeek.value in
+                        it.enabledWeekdays
+            }
+
+        val template =
+            existing ?: ShiftTemplate(
+                name = "Aangepast $start-$end",
+                kind = kind,
+                start = start,
+                end = end,
+                enabledWeekdays =
+                    setOf(parsed.dayOfWeek.value),
+                autoGenerated = false,
+                archived = false
+            )
+
+        val working =
+            if (existing == null) {
+                state.copy(
+                    shiftTemplates =
+                        state.shiftTemplates + template
+                )
+            } else {
+                state
+            }
+
+        manualBlockReason(
+            employeeId,
+            parsed,
+            template.id,
+            working
+        )?.let {
+            showStatus("Niet opgeslagen: $it")
+            return
         }
 
-        val template = existing ?: ShiftTemplate(
-            name = "Aangepast $start-$end",
-            kind = kind,
-            start = start,
-            end = end,
-            enabledWeekdays = setOf(parsed.dayOfWeek.value),
-            autoGenerated = false,
-            archived = false
+        val without =
+            working.assignments.filterNot {
+                it.employeeId == employeeId &&
+                    it.date == parsed.toString()
+            }
+
+        val candidate = Assignment(
+            employeeId = employeeId,
+            date = parsed.toString(),
+            shiftTemplateId = template.id,
+            source = "manual-custom"
         )
 
-        if (existing == null) {
-            commitActive(
-                state.copy(shiftTemplates = state.shiftTemplates + template),
-                "Aangepaste dienst toegevoegd"
+        val proposed =
+            working.copy(
+                assignments = without + candidate
             )
+
+        val baselineErrors =
+            validator.validate(working)
+                .filter {
+                    it.severity ==
+                        AtwValidator.Severity.ERROR &&
+                        it.employeeId == employeeId
+                }
+                .map(::violationKey)
+                .toSet()
+
+        val introducedErrors =
+            validator.validate(proposed)
+                .filter {
+                    it.severity ==
+                        AtwValidator.Severity.ERROR &&
+                        it.employeeId == employeeId
+                }
+                .filter {
+                    violationKey(it) !in baselineErrors
+                }
+
+        if (introducedErrors.isNotEmpty()) {
+            showStatus(
+                "Niet opgeslagen: " +
+                    introducedErrors.first().message
+            )
+            return
         }
 
-        setManualAssignment(employeeId, parsed, template.id)
+        commitActive(
+            proposed,
+            "Aangepaste dienst opgeslagen"
+        )
+
+        if (
+            state.settings.autoFixAfterManualChanges
+        ) {
+            autoFix()
+        }
     }
 }

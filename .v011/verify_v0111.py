@@ -34,7 +34,7 @@ checks = {
         'filterNot { it.archived }',
     ],
     'desktopApp/src/main/kotlin/nl/roosterandroid/desktop/SchedulePanel.kt': [
-        'secondaryButton("Dienst aanpassen")',
+        'primaryButton("Dienst aanpassen")',
         'ManualScheduleEditor.open(',
     ],
     'desktopApp/src/main/kotlin/nl/roosterandroid/desktop/ManualScheduleEditor.kt': [
@@ -46,7 +46,7 @@ checks = {
         'archivedAutoTemplateDoesNotComeBack',
         'editingReferencedTemplatePreservesOldShiftAndCreatesReplacement',
     ],
-    'desktopApp/build.gradle.kts': ['version = "0.11.1"'],
+    'desktopApp/build.gradle.kts': ['version = "0.11.2"'],
 }
 
 errors = []
@@ -66,10 +66,10 @@ if 'CREW' in role_line:
     errors.append('AppModels.kt: CREW mag niet in EmployeeRole staan')
 
 if errors:
-    print('❌ v0.11.1 statische debug mislukt:')
+    print('❌ v0.11.2 statische debug mislukt:')
     for err in errors:
         print(' -', err)
     raise SystemExit(1)
 
-print('✅ v0.11.1 statische debug OK')
+print('✅ v0.11.2 statische debug OK')
 print('   model / archive / solver / ATW / templates / manual editor / regressietests aanwezig')

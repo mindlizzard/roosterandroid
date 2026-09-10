@@ -150,28 +150,40 @@ internal class RulesPanel(private val controller: DesktopController) : JPanel(Bo
             add(primaryButton("Slimme templates voorstellen") {
                 controller.refreshSmartTemplates()
             })
-            add(secondaryButton("Bewerken") { editTemplate() })
-            add(secondaryButton("Verwijderen") { removeTemplate() })
-            add(secondaryButton("Wijzigen") {
+            add(secondaryButton("Bewerken") {
                 selectedTemplate()?.let { template ->
-                    DesktopDialogs.template(this@RulesPanel, template)?.let(controller::updateTemplate)
+                    DesktopDialogs.template(this@RulesPanel, template)
+                        ?.let(controller::updateTemplate)
                 }
             })
-            add(secondaryButton("Dupliceren") { selectedTemplate()?.let(controller::duplicateTemplate) })
+            add(secondaryButton("Dupliceren") {
+                selectedTemplate()?.let(controller::duplicateTemplate)
+            })
             add(secondaryButton("Verwijderen") {
-                selectedTemplate()?.let { template ->
-                    if (JOptionPane.showConfirmDialog(
-                            this@RulesPanel,
-                            "Template '${template.name}' verwijderen?",
-                            "Diensttemplate verwijderen",
-                            JOptionPane.YES_NO_OPTION
-                        ) == JOptionPane.YES_OPTION
-                    ) controller.removeTemplate(template.id)
+                val template = selectedTemplate() ?: return@secondaryButton
+                if (JOptionPane.showConfirmDialog(
+                        this@RulesPanel,
+                        "${template.name} ${template.start}-${template.end} verwijderen?\n" +
+                            "Bestaande roosters blijven hun oorspronkelijke tijden houden.",
+                        "Diensttemplate verwijderen",
+                        JOptionPane.YES_NO_OPTION,
+                        JOptionPane.WARNING_MESSAGE
+                    ) == JOptionPane.YES_OPTION
+                ) {
+                    controller.removeTemplate(template.id)
                 }
             })
         }, BorderLayout.NORTH)
+
         add(tableScroll(templateTable), BorderLayout.CENTER)
-        add(JLabel("Je kunt onbeperkt eigen diensten maken. Een eindtijd na middernacht, zoals 01:00, wordt correct berekend."), BorderLayout.SOUTH)
+
+        add(
+            JLabel(
+                "Alleen actieve templates worden hier getoond. " +
+                    "Oude gebruikte templates blijven veilig in de historie bewaard."
+            ),
+            BorderLayout.SOUTH
+        )
     }
 
     private fun hoursTab(): JPanel = JPanel(BorderLayout(0, 8)).apply {
@@ -201,7 +213,7 @@ internal class RulesPanel(private val controller: DesktopController) : JPanel(Bo
             """
             De planner controleert de algemene Nederlandse Arbeidstijdenwet voor werknemers van 18 jaar en ouder.
 
-            In versie 0.11.1 worden onder andere gecontroleerd:
+            In versie 0.11.2 worden onder andere gecontroleerd:
             • maximaal 12 uur per dienst;
             • maximaal 60 uur per week;
             • gemiddeld maximaal 55 uur over 4 weken en 48 uur over 16 weken;
@@ -248,7 +260,9 @@ internal class RulesPanel(private val controller: DesktopController) : JPanel(Bo
 
     private fun selectedTemplate(): ShiftTemplate? {
         val row = selectedModelRow(templateTable) ?: return null
-        return controller.state.shiftTemplates.getOrNull(row)
+        return controller.state.shiftTemplates
+            .filterNot { it.archived }
+            .getOrNull(row)
     }
 
     private fun selectedHours(): OperatingHours? {

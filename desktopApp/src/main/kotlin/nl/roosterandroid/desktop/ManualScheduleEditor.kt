@@ -31,7 +31,12 @@ internal object ManualScheduleEditor {
         override fun toString(): String = label
     }
 
-    private data class ActionChoice(val label: String, val template: ShiftTemplate? = null, val custom: Boolean = false) {
+    private data class ActionChoice(
+        val label: String,
+        val template: ShiftTemplate? = null,
+        val custom: Boolean = false,
+        val keepCurrent: Boolean = false
+    ) {
         override fun toString(): String = label
     }
 
@@ -72,40 +77,106 @@ internal object ManualScheduleEditor {
         editDay(parent, controller, employee, date)
     }
 
-    private fun editDay(parent: Component, controller: DesktopController, employee: Employee, date: LocalDate) {
+    fun open(
+        parent: Component,
+        controller: DesktopController,
+        employee: Employee,
+        date: LocalDate
+    ) {
+        editDay(parent, controller, employee, date)
+    }
+
+    private fun editDay(
+        parent: Component,
+        controller: DesktopController,
+        employee: Employee,
+        date: LocalDate
+    ) {
         val state = controller.state
+
         val currentAssignment = state.assignments.lastOrNull {
-            it.employeeId == employee.id && it.date == date.toString()
+            it.employeeId == employee.id &&
+                it.date == date.toString()
         }
+
         val currentTemplate = currentAssignment?.let { assignment ->
-            state.shiftTemplates.firstOrNull { it.id == assignment.shiftTemplateId }
+            state.shiftTemplates.firstOrNull {
+                it.id == assignment.shiftTemplateId
+            }
         }
-        val availabilityText = availabilityText(state, employee, date)
-        val currentText = currentTemplate?.let { "${it.name} ${it.start}-${it.end}" } ?: "Vrij"
+
+        val availableText = availabilityText(
+            state,
+            employee,
+            date
+        )
+
+        val currentText = currentTemplate?.let {
+            "${it.name} ${it.start}-${it.end}"
+        } ?: "Vrij"
 
         val fitting = state.shiftTemplates
             .asSequence()
             .filterNot { it.archived }
-            .filter { date.dayOfWeek.value in it.enabledWeekdays }
+            .filter {
+                date.dayOfWeek.value in it.enabledWeekdays
+            }
             .filter { employee.canWork(it.kind) }
             .filter { state.allowsShiftOn(date, it) }
-            .filter { fitsAvailability(state, employee, date, it) }
-            .sortedWith(compareBy<ShiftTemplate>({ it.start }, { it.end }, { it.name }))
+            .filter {
+                fitsAvailability(
+                    state,
+                    employee,
+                    date,
+                    it
+                )
+            }
+            .sortedWith(
+                compareBy<ShiftTemplate>(
+                    { it.start },
+                    { it.end },
+                    { it.name }
+                )
+            )
             .toList()
 
         val actions = buildList {
+            if (currentAssignment != null) {
+                add(
+                    ActionChoice(
+                        "Huidige dienst behouden   $currentText",
+                        keepCurrent = true
+                    )
+                )
+            }
+
             add(ActionChoice("Vrij / geen dienst"))
-            fitting.forEach { add(ActionChoice("${it.name}   ${it.start}-${it.end}", template = it)) }
-            add(ActionChoice("Aangepaste tijd...", custom = true))
+
+            fitting.forEach {
+                add(
+                    ActionChoice(
+                        "${it.name}   ${it.start}-${it.end}",
+                        template = it
+                    )
+                )
+            }
+
+            add(
+                ActionChoice(
+                    "Aangepaste tijd...",
+                    custom = true
+                )
+            )
         }.toTypedArray()
 
         val message = arrayOf(
             "${employee.name} • $date",
-            "Beschikbaar: $availabilityText",
+            "Beschikbaar: $availableText",
             "Huidige dienst: $currentText",
             " ",
             "Kies de echte dienst. Beschikbaarheid blijft alleen het toegestane tijdvenster."
         )
+
         val selected = JOptionPane.showInputDialog(
             parent,
             message,
@@ -113,13 +184,33 @@ internal object ManualScheduleEditor {
             JOptionPane.PLAIN_MESSAGE,
             null,
             actions,
-            actions.firstOrNull { it.template?.id == currentTemplate?.id } ?: actions.first()
+            actions.first()
         ) as? ActionChoice ?: return
 
         when {
-            selected.custom -> customTime(parent, controller, employee, date)
-            selected.template == null -> controller.setManualAssignment(employee.id, date, null)
-            else -> controller.setManualAssignment(employee.id, date, selected.template.id)
+            selected.keepCurrent -> return
+
+            selected.custom ->
+                customTime(
+                    parent,
+                    controller,
+                    employee,
+                    date
+                )
+
+            selected.template == null ->
+                controller.setManualAssignment(
+                    employee.id,
+                    date,
+                    null
+                )
+
+            else ->
+                controller.setManualAssignment(
+                    employee.id,
+                    date,
+                    selected.template.id
+                )
         }
     }
 
@@ -211,15 +302,21 @@ internal object ManualScheduleEditor {
         date: LocalDate
     ): String {
         val specific = state.availability.lastOrNull {
-            it.employeeId == employee.id && it.date == date.toString()
+            it.employeeId == employee.id &&
+                it.date == date.toString()
         }
+
         val weekly = state.weeklyAvailability.lastOrNull {
             it.employeeId == employee.id &&
                 it.weekday == date.dayOfWeek.value
         }
 
         val available =
-            specific?.available ?: weekly?.available ?: true
+            if (specific != null) {
+                specific.available
+            } else {
+                weekly?.available ?: true
+            }
 
         if (!available) return "niet beschikbaar"
 
@@ -234,15 +331,31 @@ internal object ManualScheduleEditor {
         }
 
         val from =
-            specific?.earliestStart ?: weekly?.earliestStart
+            if (specific != null) {
+                specific.earliestStart
+            } else {
+                weekly?.earliestStart
+            }
+
         val until =
-            specific?.latestEnd ?: weekly?.latestEnd
+            if (specific != null) {
+                specific.latestEnd
+            } else {
+                weekly?.latestEnd
+            }
 
         return when {
-            from != null && until != null -> "$from-$until"
-            from != null -> "vanaf $from"
-            until != null -> "tot $until"
-            else -> "hele dag"
+            from != null && until != null ->
+                "$from-$until"
+
+            from != null ->
+                "vanaf $from"
+
+            until != null ->
+                "tot $until"
+
+            else ->
+                "hele dag"
         }
     }
 
@@ -257,7 +370,9 @@ internal object ManualScheduleEditor {
                     it.status == AbsenceStatus.APPROVED &&
                     it.includes(date)
             }
-        ) return false
+        ) {
+            return false
+        }
 
         val specific = state.availability.lastOrNull {
             it.employeeId == employee.id &&
@@ -270,20 +385,55 @@ internal object ManualScheduleEditor {
         }
 
         val available =
-            specific?.available ?: weekly?.available ?: true
+            if (specific != null) {
+                specific.available
+            } else {
+                weekly?.available ?: true
+            }
 
         if (!available) return false
 
         val fixedShiftKind =
-            specific?.fixedShiftKind ?: weekly?.fixedShiftKind
+            if (specific != null) {
+                specific.fixedShiftKind
+            } else {
+                weekly?.fixedShiftKind
+            }
 
         if (
             fixedShiftKind != null &&
             fixedShiftKind != template.kind
-        ) return false
+        ) {
+            return false
+        }
+
+        val earliestText =
+            if (specific != null) {
+                specific.earliestStart
+            } else {
+                weekly?.earliestStart
+            }
+
+        val latestText =
+            if (specific != null) {
+                specific.latestEnd
+            } else {
+                weekly?.latestEnd
+            }
+
+        val earliest = earliestText?.let {
+            runCatching {
+                LocalTime.parse(it)
+            }.getOrNull()
+        }
+
+        val latest = latestText?.let {
+            runCatching {
+                LocalTime.parse(it)
+            }.getOrNull()
+        }
 
         val anchor = LocalDate.of(2000, 1, 3)
-
         val shiftStart =
             anchor.atTime(template.startTime())
 
@@ -294,40 +444,30 @@ internal object ManualScheduleEditor {
             shiftEnd = shiftEnd.plusDays(1)
         }
 
-        val earliest =
-            (specific?.earliestStart ?: weekly?.earliestStart)
-                ?.let {
-                    runCatching {
-                        LocalTime.parse(it)
-                    }.getOrNull()
-                }
-
-        val latest =
-            (specific?.latestEnd ?: weekly?.latestEnd)
-                ?.let {
-                    runCatching {
-                        LocalTime.parse(it)
-                    }.getOrNull()
-                }
-
         if (earliest != null) {
-            val minStart = anchor.atTime(earliest)
-            if (shiftStart.isBefore(minStart)) {
+            val minimumStart =
+                anchor.atTime(earliest)
+
+            if (shiftStart.isBefore(minimumStart)) {
                 return false
             }
         }
 
         if (latest != null) {
-            var maxEnd = anchor.atTime(latest)
+            var maximumEnd =
+                anchor.atTime(latest)
 
             if (
                 earliest != null &&
-                !maxEnd.isAfter(anchor.atTime(earliest))
+                !maximumEnd.isAfter(
+                    anchor.atTime(earliest)
+                )
             ) {
-                maxEnd = maxEnd.plusDays(1)
+                maximumEnd =
+                    maximumEnd.plusDays(1)
             }
 
-            if (shiftEnd.isAfter(maxEnd)) {
+            if (shiftEnd.isAfter(maximumEnd)) {
                 return false
             }
         }

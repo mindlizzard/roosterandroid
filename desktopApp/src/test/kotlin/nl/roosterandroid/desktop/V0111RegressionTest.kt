@@ -2,9 +2,11 @@ package nl.roosterandroid.desktop
 
 import nl.roosterandroid.app.AppState
 import nl.roosterandroid.app.Assignment
+import nl.roosterandroid.app.Availability
 import nl.roosterandroid.app.DayDemand
 import nl.roosterandroid.app.Employee
 import nl.roosterandroid.app.EmployeeRole
+import nl.roosterandroid.app.OperatingHours
 import nl.roosterandroid.app.PlannerSettings
 import nl.roosterandroid.app.ScheduleEngine
 import nl.roosterandroid.app.ShiftKind
@@ -17,6 +19,7 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.nio.file.Files
+import java.time.LocalDate
 
 class V0111RegressionTest {
     @Test
@@ -155,4 +158,270 @@ class V0111RegressionTest {
         assertTrue(controller.state.shiftTemplates.single { it.id == original.id }.archived)
         assertEquals(original.id, controller.state.assignments.single().shiftTemplateId)
     }
+
+    @Test
+    fun removingReferencedEmployeePreservesRosterHistory() {
+        val directory = Files.createTempDirectory(
+            "roosterplanner-v0112-employee-"
+        )
+
+        val employee = Employee(
+            id = "former-manager",
+            name = "Oude manager"
+        )
+
+        val day = ShiftTemplate(
+            id = "day",
+            name = "Dag",
+            kind = ShiftKind.DAY,
+            start = "09:00",
+            end = "17:00"
+        )
+
+        val historical = Assignment(
+            employeeId = employee.id,
+            date = "2026-08-03",
+            shiftTemplateId = day.id,
+            source = "history"
+        )
+
+        val storage = DesktopStorage(directory)
+        storage.save(
+            DesktopWorkspace.fromAppState(
+                AppState(
+                    year = 2026,
+                    month = 9,
+                    employees = listOf(employee),
+                    shiftTemplates = listOf(day),
+                    assignmentHistory =
+                        listOf(historical)
+                )
+            )
+        )
+
+        val controller =
+            DesktopController(storage)
+
+        controller.removeEmployee(employee.id)
+
+        val savedEmployee =
+            controller.state.employees.single {
+                it.id == employee.id
+            }
+
+        assertFalse(savedEmployee.active)
+        assertEquals(
+            historical.id,
+            controller.state.assignmentHistory
+                .single().id
+        )
+    }
+
+    @Test
+    fun closingTimeUpdateNeverRewritesHistory() {
+        val directory = Files.createTempDirectory(
+            "roosterplanner-v0112-close-"
+        )
+
+        val employee =
+            Employee(name = "Manager")
+
+        val oldClose = ShiftTemplate(
+            id = "old-close",
+            name = "Sluit oud",
+            kind = ShiftKind.CLOSE,
+            start = "16:00",
+            end = "00:00"
+        )
+
+        val historical = Assignment(
+            employeeId = employee.id,
+            date = "2026-08-03",
+            shiftTemplateId = oldClose.id,
+            source = "history"
+        )
+
+        val current = Assignment(
+            employeeId = employee.id,
+            date = "2026-09-07",
+            shiftTemplateId = oldClose.id,
+            source = "manual"
+        )
+
+        val hours = (1..7).map { weekday ->
+            OperatingHours(
+                weekday = weekday,
+                open = "08:00",
+                close =
+                    if (weekday == 1) "01:00"
+                    else "00:00"
+            )
+        }
+
+        val state = AppState(
+            year = 2026,
+            month = 9,
+            employees = listOf(employee),
+            shiftTemplates = listOf(oldClose),
+            assignments = listOf(current),
+            assignmentHistory = listOf(historical),
+            operatingHours = hours
+        )
+
+        val storage = DesktopStorage(directory)
+        storage.save(
+            DesktopWorkspace.fromAppState(state)
+        )
+
+        val controller =
+            DesktopController(storage)
+
+        controller.alignClosingTemplatesWithOperatingHours()
+
+        assertEquals(
+            oldClose.id,
+            controller.state.assignmentHistory
+                .single().shiftTemplateId
+        )
+
+        assertTrue(
+            controller.state.shiftTemplates
+                .single { it.id == oldClose.id }
+                .archived
+        )
+
+        val newCurrent =
+            controller.state.assignments.single()
+
+        assertTrue(
+            newCurrent.shiftTemplateId != oldClose.id
+        )
+
+        assertEquals(
+            "01:00",
+            controller.state.shiftTemplates
+                .first {
+                    it.id ==
+                        newCurrent.shiftTemplateId
+                }
+                .end
+        )
+    }
+
+    @Test
+    fun specificDateAvailabilityFullyOverridesWeeklyWindowForManualEdit() {
+        val directory = Files.createTempDirectory(
+            "roosterplanner-v0112-specific-"
+        )
+
+        val employee =
+            Employee(name = "Manager")
+
+        val day = ShiftTemplate(
+            id = "day",
+            name = "Dag",
+            kind = ShiftKind.DAY,
+            start = "09:00",
+            end = "17:00"
+        )
+
+        val state = AppState(
+            year = 2026,
+            month = 9,
+            employees = listOf(employee),
+            shiftTemplates = listOf(day),
+            weeklyAvailability = listOf(
+                WeeklyAvailability(
+                    employeeId = employee.id,
+                    weekday = 1,
+                    available = true,
+                    earliestStart = "12:00",
+                    latestEnd = "20:00"
+                )
+            ),
+            availability = listOf(
+                Availability(
+                    employeeId = employee.id,
+                    date = "2026-09-07",
+                    available = true,
+                    fixedShiftKind = ShiftKind.DAY
+                )
+            ),
+            settings = PlannerSettings(
+                atwEnabled = false
+            )
+        )
+
+        val storage = DesktopStorage(directory)
+        storage.save(
+            DesktopWorkspace.fromAppState(state)
+        )
+
+        val controller =
+            DesktopController(storage)
+
+        controller.setManualAssignment(
+            employee.id,
+            LocalDate.parse("2026-09-07"),
+            day.id
+        )
+
+        assertEquals(
+            day.id,
+            controller.state.assignments
+                .single().shiftTemplateId
+        )
+    }
+
+    @Test
+    fun blockedCustomShiftDoesNotLeaveOrphanTemplate() {
+        val directory = Files.createTempDirectory(
+            "roosterplanner-v0112-custom-"
+        )
+
+        val employee =
+            Employee(name = "Manager")
+
+        val state = AppState(
+            year = 2026,
+            month = 9,
+            employees = listOf(employee),
+            shiftTemplates = emptyList(),
+            weeklyAvailability = listOf(
+                WeeklyAvailability(
+                    employeeId = employee.id,
+                    weekday = 1,
+                    available = false
+                )
+            ),
+            settings = PlannerSettings(
+                atwEnabled = false
+            )
+        )
+
+        val storage = DesktopStorage(directory)
+        storage.save(
+            DesktopWorkspace.fromAppState(state)
+        )
+
+        val controller =
+            DesktopController(storage)
+
+        controller.setManualCustomAssignment(
+            employee.id,
+            "2026-09-07",
+            "09:00",
+            "17:00",
+            ShiftKind.DAY
+        )
+
+        assertTrue(
+            controller.state.assignments.isEmpty()
+        )
+
+        assertTrue(
+            controller.state.shiftTemplates.isEmpty()
+        )
+    }
+
 }

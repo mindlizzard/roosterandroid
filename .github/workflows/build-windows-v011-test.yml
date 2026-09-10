@@ -1,4 +1,4 @@
-name: Build Windows v0.11.1 STABILITY
+name: Build Windows v0.11.2 STABILITY
 
 on:
   push:
@@ -19,7 +19,7 @@ jobs:
     timeout-minutes: 35
 
     steps:
-      - name: Checkout v0.11.1 source
+      - name: Checkout v0.11.2 source
         uses: actions/checkout@v5
 
 
@@ -65,11 +65,11 @@ jobs:
           jpackage `
             --type app-image `
             --name RoosterPlanner `
-            --app-version 0.11.1 `
+            --app-version 0.11.2 `
             --vendor "RoosterPlanner" `
-            --description "Offline roosterplanner v0.11.1 debug met ATW-controle" `
+            --description "Offline roosterplanner v0.11.2 stability met ATW-controle" `
             --input $inputDir `
-            --main-jar "roosterplanner-windows-0.11.1.jar" `
+            --main-jar "roosterplanner-windows-0.11.2.jar" `
             --main-class "nl.roosterandroid.desktop.DesktopMainKt" `
             --java-options "-Dfile.encoding=UTF-8" `
             --icon $icon `
@@ -77,17 +77,17 @@ jobs:
 
           Compress-Archive `
             -Path "$outputDir\portable\RoosterPlanner" `
-            -DestinationPath "$outputDir\RoosterPlanner-0.11.1-debug-portable.zip" `
+            -DestinationPath "$outputDir\RoosterPlanner-0.11.2-stability-portable.zip" `
             -CompressionLevel Optimal
 
           jpackage `
             --type exe `
             --name RoosterPlanner `
-            --app-version 0.11.1 `
+            --app-version 0.11.2 `
             --vendor "RoosterPlanner" `
-            --description "Offline roosterplanner v0.11.1 debug met ATW-controle" `
+            --description "Offline roosterplanner v0.11.2 stability met ATW-controle" `
             --input $inputDir `
-            --main-jar "roosterplanner-windows-0.11.1.jar" `
+            --main-jar "roosterplanner-windows-0.11.2.jar" `
             --main-class "nl.roosterandroid.desktop.DesktopMainKt" `
             --java-options "-Dfile.encoding=UTF-8" `
             --icon $icon `
@@ -97,12 +97,12 @@ jobs:
             --win-shortcut `
             --dest "$outputDir\installer"
 
-      - name: Upload Windows v0.11.1 debug package
+      - name: Upload Windows v0.11.2 debug package
         uses: actions/upload-artifact@v4
         with:
-          name: RoosterPlanner-Windows-v0.11.1-DEBUG
+          name: RoosterPlanner-Windows-v0.11.2-STABILITY
           path: |
-            desktopApp/build/windows/RoosterPlanner-0.11.1-debug-portable.zip
+            desktopApp/build/windows/RoosterPlanner-0.11.2-stability-portable.zip
             desktopApp/build/windows/installer/*.exe
           if-no-files-found: error
           retention-days: 7
