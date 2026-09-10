@@ -22,15 +22,15 @@ jobs:
 
       - name: Apply v0.11 integration
         shell: pwsh
-        run: python .v011/apply_v011_changes.py .
+        run: python -X utf8 .v011/apply_v011_changes.py .
 
       - name: Apply v0.11.1 bugfixes
         shell: pwsh
-        run: python .v011/apply_v0111_hotfix.py .
+        run: python -X utf8 .v011/apply_v0111_hotfix.py .
 
       - name: Static debug verification
         shell: pwsh
-        run: python .v011/verify_v0111.py .
+        run: python -X utf8 .v011/verify_v0111.py .
 
       - name: Set up Java 17
         uses: actions/setup-java@v5
