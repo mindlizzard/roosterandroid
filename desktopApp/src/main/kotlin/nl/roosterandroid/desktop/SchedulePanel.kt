@@ -7,7 +7,7 @@ import nl.roosterandroid.app.PersonDayMarker
 import nl.roosterandroid.app.ResponsibilityRule
 import nl.roosterandroid.app.ShiftKind
 import nl.roosterandroid.app.ShiftTemplate
-import nl.roosterandroid.app.rosterQualityRows
+import nl.roosterandroid.app.rosterPriorityRows
 import java.awt.BorderLayout
 import java.awt.Color
 import java.awt.Component
@@ -125,48 +125,61 @@ internal class SchedulePanel(private val controller: DesktopController) : JPanel
         model.refresh()
         configureColumns()
 
-        val qualityRows =
-            controller.state.rosterQualityRows(
+        val priorityRows =
+            controller.state.rosterPriorityRows(
                 controller.violations
             )
 
         qualitySummary.text =
-            if (qualityRows.isEmpty()) {
+            if (priorityRows.isEmpty()) {
                 "Roosterkwaliteit: nog geen managers."
             } else {
-                "Roosterkwaliteit  •  " +
-                    qualityRows.joinToString(
+                "Aandacht eerst  •  " +
+                    priorityRows.joinToString(
                         "    |    "
                     ) { row ->
+                        val quality =
+                            row.quality
+
                         val hours =
                             if (
-                                row.targetHours > 0.0
+                                quality.targetHours >
+                                0.0
                             ) {
-                                "${row.plannedHours}/${row.targetHours}u"
+                                "${quality.plannedHours}/" +
+                                    "${quality.targetHours}u"
                             } else {
-                                "${row.plannedHours}u"
+                                "${quality.plannedHours}u"
                             }
 
-                        val status =
-                            when {
-                                row.atwErrors > 0 ->
-                                    "${row.atwErrors} ATW"
+                        val priority =
+                            when (row.level) {
+                                nl.roosterandroid.app
+                                    .RosterPriorityLevel
+                                    .CRITICAL ->
+                                    "KRITIEK"
 
-                                row.hoursOnTarget ->
+                                nl.roosterandroid.app
+                                    .RosterPriorityLevel
+                                    .HIGH ->
+                                    "HOOG"
+
+                                nl.roosterandroid.app
+                                    .RosterPriorityLevel
+                                    .MEDIUM ->
+                                    "LET OP"
+
+                                nl.roosterandroid.app
+                                    .RosterPriorityLevel
+                                    .OK ->
                                     "OK"
-
-                                row.hourDifference > 0.0 ->
-                                    "+${row.hourDifference}u"
-
-                                else ->
-                                    "${row.hourDifference}u"
                             }
 
-                        "${row.employeeName}: " +
+                        "${quality.employeeName}: " +
+                            "$priority " +
+                            "(${row.priorityScore}) • " +
                             "$hours • " +
-                            "${row.shifts} diensten • " +
-                            "${row.weekendShifts} weekend • " +
-                            "$status"
+                            "${row.weekendsWorked} weekenden"
                     }
             }
 

@@ -1185,8 +1185,8 @@ private fun MonthHeader(controller: AppController) {
 private fun OverviewScreen(controller: AppController) {
     val errors = controller.violations.count { it.severity == AtwValidator.Severity.ERROR }
     val warnings = controller.violations.count { it.severity == AtwValidator.Severity.WARNING }
-    val qualityRows =
-        controller.state.rosterQualityRows(
+    val priorityRows =
+        controller.state.rosterPriorityRows(
             controller.violations
         )
 
@@ -1204,10 +1204,10 @@ private fun OverviewScreen(controller: AppController) {
             }
         }
         item {
-            SectionTitle("Roosterkwaliteit")
+            SectionTitle("Roosterkwaliteit • aandacht eerst")
         }
 
-        if (qualityRows.isEmpty()) {
+        if (priorityRows.isEmpty()) {
             item {
                 InfoCard(
                     "Nog geen managers om te analyseren."
@@ -1215,10 +1215,10 @@ private fun OverviewScreen(controller: AppController) {
             }
         } else {
             items(
-                items = qualityRows,
+                items = priorityRows,
                 key = { it.employeeId }
             ) { row ->
-                QualityCard(row)
+                PriorityCard(row)
             }
         }
 
@@ -1440,29 +1440,62 @@ private fun SummaryCard(label: String, value: String, modifier: Modifier = Modif
 }
 
 @Composable
-private fun QualityCard(
-    row: RosterQualityRow
+private fun PriorityCard(
+    row: RosterPriorityRow
 ) {
+    val quality =
+        row.quality
+
     val hourText =
-        if (row.targetHours > 0.0) {
-            "${row.plannedHours} / ${row.targetHours} uur"
+        if (quality.targetHours > 0.0) {
+            "${quality.plannedHours} / " +
+                "${quality.targetHours} uur"
         } else {
-            "${row.plannedHours} uur • geen contractdoel"
+            "${quality.plannedHours} uur • " +
+                "geen contractdoel"
         }
 
     val difference =
         when {
-            row.targetHours <= 0.0 ->
+            quality.targetHours <= 0.0 ->
                 "Geen contractdoel"
 
-            row.hourDifference > 1.0 ->
-                "+${row.hourDifference} uur"
+            quality.hourDifference > 1.0 ->
+                "+${quality.hourDifference} uur"
 
-            row.hourDifference < -1.0 ->
-                "${row.hourDifference} uur"
+            quality.hourDifference < -1.0 ->
+                "${quality.hourDifference} uur"
 
             else ->
                 "Op doel"
+        }
+
+    val priorityText =
+        when (row.level) {
+            RosterPriorityLevel.CRITICAL ->
+                "KRITIEK"
+
+            RosterPriorityLevel.HIGH ->
+                "HOOG"
+
+            RosterPriorityLevel.MEDIUM ->
+                "LET OP"
+
+            RosterPriorityLevel.OK ->
+                "OK"
+        }
+
+    val priorityColor =
+        when (row.level) {
+            RosterPriorityLevel.CRITICAL,
+            RosterPriorityLevel.HIGH ->
+                MaterialTheme.colorScheme.error
+
+            RosterPriorityLevel.MEDIUM ->
+                MaterialTheme.colorScheme.tertiary
+
+            RosterPriorityLevel.OK ->
+                MaterialTheme.colorScheme.primary
         }
 
     Card(
@@ -1474,38 +1507,45 @@ private fun QualityCard(
             )
     ) {
         Column(
-            modifier = Modifier.padding(14.dp),
+            modifier =
+                Modifier.padding(14.dp),
             verticalArrangement =
                 Arrangement.spacedBy(4.dp)
         ) {
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier =
+                    Modifier.fillMaxWidth(),
                 horizontalArrangement =
                     Arrangement.SpaceBetween,
                 verticalAlignment =
                     Alignment.CenterVertically
             ) {
-                Text(
-                    row.employeeName,
-                    style =
-                        MaterialTheme.typography.titleMedium,
-                    fontWeight =
-                        FontWeight.Bold
-                )
+                Column {
+                    Text(
+                        quality.employeeName,
+                        style =
+                            MaterialTheme.typography.titleMedium,
+                        fontWeight =
+                            FontWeight.Bold
+                    )
+
+                    Text(
+                        "$priorityText • score ${row.priorityScore}",
+                        style =
+                            MaterialTheme.typography.labelMedium,
+                        color =
+                            priorityColor,
+                        fontWeight =
+                            FontWeight.Bold
+                    )
+                }
 
                 Text(
                     difference,
                     style =
                         MaterialTheme.typography.labelLarge,
                     color =
-                        if (
-                            row.hoursOnTarget &&
-                            row.atwErrors == 0
-                        ) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.error
-                        }
+                        priorityColor
                 )
             }
 
@@ -1518,20 +1558,27 @@ private fun QualityCard(
             )
 
             Text(
-                "${row.shifts} diensten • " +
-                    "${row.weekendShifts} weekend • " +
-                    "${row.manualShifts} handmatig",
+                "${quality.shifts} diensten • " +
+                    "${row.weekendsWorked} weekenden • " +
+                    "${quality.manualShifts} handmatig",
                 style =
                     MaterialTheme.typography.bodyMedium
             )
 
-            if (row.issues.isNotEmpty()) {
+            Text(
+                "ATW: ${quality.atwErrors} fout • " +
+                    "${row.atwWarnings} waarschuwing",
+                style =
+                    MaterialTheme.typography.bodySmall
+            )
+
+            if (row.reasons.isNotEmpty()) {
                 Text(
-                    row.issues.joinToString(" • "),
+                    row.reasons.joinToString(" • "),
                     style =
                         MaterialTheme.typography.bodySmall,
                     color =
-                        MaterialTheme.colorScheme.error
+                        priorityColor
                 )
             }
         }

@@ -46,7 +46,7 @@ checks = {
         'archivedAutoTemplateDoesNotComeBack',
         'editingReferencedTemplatePreservesOldShiftAndCreatesReplacement',
     ],
-    'desktopApp/build.gradle.kts': ['version = "0.12.0-alpha11"'],
+    'desktopApp/build.gradle.kts': ['version = "0.12.0-alpha12"'],
 }
 
 
@@ -89,8 +89,8 @@ checks.update({
         '.fromAppState(oldState)',
     ],
     'app/build.gradle.kts': [
-        'versionCode = 22',
-        'versionName = "0.12.0-alpha11"',
+        'versionCode = 23',
+        'versionName = "0.12.0-alpha12"',
     ],
     'desktopApp/src/main/kotlin/nl/roosterandroid/desktop/DesktopController.kt': [
         'borrowEmployeeFromLocation(',
@@ -370,24 +370,54 @@ checks.setdefault(
     'app/src/main/java/nl/roosterandroid/app/MainActivity.kt',
     []
 ).extend([
-    'SectionTitle("Roosterkwaliteit")',
-    'private fun QualityCard(',
-    'row.plannedHours',
-    'row.targetHours',
-    'row.weekendShifts',
-    'row.manualShifts',
+    'SectionTitle("Roosterkwaliteit • aandacht eerst")',
+    'private fun PriorityCard(',
+    'RosterPriorityLevel.CRITICAL',
+    'row.priorityScore',
+    'row.weekendsWorked',
+    'row.atwWarnings',
+    'quality.plannedHours',
+    'quality.targetHours',
 ])
 
 checks.setdefault(
     'desktopApp/src/main/kotlin/nl/roosterandroid/desktop/SchedulePanel.kt',
     []
 ).extend([
-    'import nl.roosterandroid.app.rosterQualityRows',
+    'import nl.roosterandroid.app.rosterPriorityRows',
     'private val qualitySummary',
     'qualitySummary.text =',
-    '"Roosterkwaliteit',
-    'row.plannedHours',
-    'row.weekendShifts',
+    '"Aandacht eerst',
+    'row.priorityScore',
+    'row.weekendsWorked',
+    'quality.plannedHours',
+])
+
+
+checks.setdefault(
+    'app/src/main/java/nl/roosterandroid/app/RosterPriority.kt',
+    []
+).extend([
+    'enum class RosterPriorityLevel',
+    'data class RosterPriorityRow(',
+    'val atwWarnings: Int',
+    'val weekendsWorked: Int',
+    'val weekendOverload: Double',
+    'val priorityScore: Int',
+    'fun AppState.rosterPriorityRows(',
+    'RosterPriorityLevel.CRITICAL',
+    'RosterPriorityLevel.HIGH',
+    'RosterPriorityLevel.MEDIUM',
+])
+
+checks.setdefault(
+    'app/src/test/java/nl/roosterandroid/app/RosterPriorityTest.kt',
+    []
+).extend([
+    'atwErrorGetsHighestPriority',
+    'atwWarningRaisesAttentionLevel',
+    'weekendOverloadIsDetected',
+    'largeContractGapGetsHighPriority',
 ])
 
 errors = []
