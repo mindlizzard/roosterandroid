@@ -1185,6 +1185,11 @@ private fun MonthHeader(controller: AppController) {
 private fun OverviewScreen(controller: AppController) {
     val errors = controller.violations.count { it.severity == AtwValidator.Severity.ERROR }
     val warnings = controller.violations.count { it.severity == AtwValidator.Severity.WARNING }
+    val qualityRows =
+        controller.state.rosterQualityRows(
+            controller.violations
+        )
+
     LazyColumn(modifier = Modifier.fillMaxSize()) {
         item { MonthHeader(controller) }
         item { LocationPanel(controller) }
@@ -1198,6 +1203,25 @@ private fun OverviewScreen(controller: AppController) {
                 SummaryCard("ATW", if (errors == 0) "✓" else "$errors fout", Modifier.weight(1f))
             }
         }
+        item {
+            SectionTitle("Roosterkwaliteit")
+        }
+
+        if (qualityRows.isEmpty()) {
+            item {
+                InfoCard(
+                    "Nog geen managers om te analyseren."
+                )
+            }
+        } else {
+            items(
+                items = qualityRows,
+                key = { it.employeeId }
+            ) { row ->
+                QualityCard(row)
+            }
+        }
+
         item {
             Row(
                 modifier = Modifier.fillMaxWidth().padding(16.dp),
@@ -1411,6 +1435,105 @@ private fun SummaryCard(label: String, value: String, modifier: Modifier = Modif
         Column(Modifier.padding(12.dp)) {
             Text(label, style = MaterialTheme.typography.labelMedium)
             Text(value, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+@Composable
+private fun QualityCard(
+    row: RosterQualityRow
+) {
+    val hourText =
+        if (row.targetHours > 0.0) {
+            "${row.plannedHours} / ${row.targetHours} uur"
+        } else {
+            "${row.plannedHours} uur • geen contractdoel"
+        }
+
+    val difference =
+        when {
+            row.targetHours <= 0.0 ->
+                "Geen contractdoel"
+
+            row.hourDifference > 1.0 ->
+                "+${row.hourDifference} uur"
+
+            row.hourDifference < -1.0 ->
+                "${row.hourDifference} uur"
+
+            else ->
+                "Op doel"
+        }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(
+                horizontal = 16.dp,
+                vertical = 4.dp
+            )
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement =
+                Arrangement.spacedBy(4.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement =
+                    Arrangement.SpaceBetween,
+                verticalAlignment =
+                    Alignment.CenterVertically
+            ) {
+                Text(
+                    row.employeeName,
+                    style =
+                        MaterialTheme.typography.titleMedium,
+                    fontWeight =
+                        FontWeight.Bold
+                )
+
+                Text(
+                    difference,
+                    style =
+                        MaterialTheme.typography.labelLarge,
+                    color =
+                        if (
+                            row.hoursOnTarget &&
+                            row.atwErrors == 0
+                        ) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.error
+                        }
+                )
+            }
+
+            Text(
+                hourText,
+                style =
+                    MaterialTheme.typography.titleLarge,
+                fontWeight =
+                    FontWeight.Bold
+            )
+
+            Text(
+                "${row.shifts} diensten • " +
+                    "${row.weekendShifts} weekend • " +
+                    "${row.manualShifts} handmatig",
+                style =
+                    MaterialTheme.typography.bodyMedium
+            )
+
+            if (row.issues.isNotEmpty()) {
+                Text(
+                    row.issues.joinToString(" • "),
+                    style =
+                        MaterialTheme.typography.bodySmall,
+                    color =
+                        MaterialTheme.colorScheme.error
+                )
+            }
         }
     }
 }

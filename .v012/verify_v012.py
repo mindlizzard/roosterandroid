@@ -46,7 +46,7 @@ checks = {
         'archivedAutoTemplateDoesNotComeBack',
         'editingReferencedTemplatePreservesOldShiftAndCreatesReplacement',
     ],
-    'desktopApp/build.gradle.kts': ['version = "0.12.0-alpha10"'],
+    'desktopApp/build.gradle.kts': ['version = "0.12.0-alpha11"'],
 }
 
 
@@ -89,8 +89,8 @@ checks.update({
         '.fromAppState(oldState)',
     ],
     'app/build.gradle.kts': [
-        'versionCode = 21',
-        'versionName = "0.12.0-alpha10"',
+        'versionCode = 22',
+        'versionName = "0.12.0-alpha11"',
     ],
     'desktopApp/src/main/kotlin/nl/roosterandroid/desktop/DesktopController.kt': [
         'borrowEmployeeFromLocation(',
@@ -339,6 +339,55 @@ checks.setdefault(
     'solverPrefersShiftThatMatchesContractHours',
     '40.0',
     'shortShift.id',
+])
+
+
+checks.setdefault(
+    'app/src/main/java/nl/roosterandroid/app/RosterQuality.kt',
+    []
+).extend([
+    'data class RosterQualityRow(',
+    'val plannedHours: Double',
+    'val targetHours: Double',
+    'val hourDifference: Double',
+    'val weekendShifts: Int',
+    'val manualShifts: Int',
+    'val atwErrors: Int',
+    'fun AppState.rosterQualityRows(',
+    'val hoursOnTarget: Boolean',
+])
+
+checks.setdefault(
+    'app/src/test/java/nl/roosterandroid/app/RosterQualityTest.kt',
+    []
+).extend([
+    'qualityRowShowsHoursAndShiftCounts',
+    'fortyHourWeekCanBeExactlyOnTarget',
+    'hostIsNotShownInManagerQualityOverview',
+])
+
+checks.setdefault(
+    'app/src/main/java/nl/roosterandroid/app/MainActivity.kt',
+    []
+).extend([
+    'SectionTitle("Roosterkwaliteit")',
+    'private fun QualityCard(',
+    'row.plannedHours',
+    'row.targetHours',
+    'row.weekendShifts',
+    'row.manualShifts',
+])
+
+checks.setdefault(
+    'desktopApp/src/main/kotlin/nl/roosterandroid/desktop/SchedulePanel.kt',
+    []
+).extend([
+    'import nl.roosterandroid.app.rosterQualityRows',
+    'private val qualitySummary',
+    'qualitySummary.text =',
+    '"Roosterkwaliteit',
+    'row.plannedHours',
+    'row.weekendShifts',
 ])
 
 errors = []

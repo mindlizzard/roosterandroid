@@ -7,6 +7,7 @@ import nl.roosterandroid.app.PersonDayMarker
 import nl.roosterandroid.app.ResponsibilityRule
 import nl.roosterandroid.app.ShiftKind
 import nl.roosterandroid.app.ShiftTemplate
+import nl.roosterandroid.app.rosterQualityRows
 import java.awt.BorderLayout
 import java.awt.Color
 import java.awt.Component
@@ -49,6 +50,21 @@ internal class SchedulePanel(private val controller: DesktopController) : JPanel
     }
     private val hint = JLabel("Dubbelklik op een dienst om hem handmatig te wijzigen. Volledige tijden blijven zichtbaar.")
 
+    private val qualitySummary =
+        javax.swing.JTextArea().apply {
+            isEditable = false
+            isFocusable = false
+            lineWrap = true
+            wrapStyleWord = true
+            isOpaque = false
+            border = EmptyBorder(
+                4,
+                4,
+                8,
+                4
+            )
+        }
+
     init {
         border = EmptyBorder(14, 14, 14, 14)
         val toolbar = JPanel(FlowLayout(FlowLayout.LEFT, 8, 4)).apply {
@@ -58,7 +74,22 @@ internal class SchedulePanel(private val controller: DesktopController) : JPanel
             add(secondaryButton("PDF maken") { exportPdf() })
             add(secondaryButton("CSV voor Excel") { exportCsv() })
         }
-        add(toolbar, BorderLayout.NORTH)
+        val topPanel =
+            JPanel(BorderLayout()).apply {
+                add(
+                    toolbar,
+                    BorderLayout.NORTH
+                )
+                add(
+                    qualitySummary,
+                    BorderLayout.SOUTH
+                )
+            }
+
+        add(
+            topPanel,
+            BorderLayout.NORTH
+        )
 
         table.autoResizeMode = JTable.AUTO_RESIZE_OFF
         table.rowHeight = 68
@@ -93,6 +124,52 @@ internal class SchedulePanel(private val controller: DesktopController) : JPanel
     override fun refresh() {
         model.refresh()
         configureColumns()
+
+        val qualityRows =
+            controller.state.rosterQualityRows(
+                controller.violations
+            )
+
+        qualitySummary.text =
+            if (qualityRows.isEmpty()) {
+                "Roosterkwaliteit: nog geen managers."
+            } else {
+                "Roosterkwaliteit  •  " +
+                    qualityRows.joinToString(
+                        "    |    "
+                    ) { row ->
+                        val hours =
+                            if (
+                                row.targetHours > 0.0
+                            ) {
+                                "${row.plannedHours}/${row.targetHours}u"
+                            } else {
+                                "${row.plannedHours}u"
+                            }
+
+                        val status =
+                            when {
+                                row.atwErrors > 0 ->
+                                    "${row.atwErrors} ATW"
+
+                                row.hoursOnTarget ->
+                                    "OK"
+
+                                row.hourDifference > 0.0 ->
+                                    "+${row.hourDifference}u"
+
+                                else ->
+                                    "${row.hourDifference}u"
+                            }
+
+                        "${row.employeeName}: " +
+                            "$hours • " +
+                            "${row.shifts} diensten • " +
+                            "${row.weekendShifts} weekend • " +
+                            "$status"
+                    }
+            }
+
         val errors = controller.violations.count { it.severity == AtwValidator.Severity.ERROR }
         hint.text = if (errors == 0) {
             "Dubbelklik om te bewerken • SETUP / DAG / TUSSEN / SLUIT vet • tijden volledig als 09:00–17:00"
