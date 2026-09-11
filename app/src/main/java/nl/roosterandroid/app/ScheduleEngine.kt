@@ -438,7 +438,32 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
             }
 
             ordered.forEach { employee ->
-                val target = targetDaysInMonthWeek(employee, monday, ym, state, history)
+                val target =
+                    targetDaysInMonthWeek(
+                        employee,
+                        monday,
+                        ym,
+                        state,
+                        history
+                    )
+
+                val targetHours =
+                    employee.expectedHoursForContractDays(
+                        target
+                    )
+
+                val contractWindowStart =
+                    maxOf(
+                        monday,
+                        ym.atDay(1)
+                    )
+
+                val contractWindowEnd =
+                    minOf(
+                        monday.plusDays(6),
+                        ym.atEndOfMonth()
+                    )
+
                 var safety = 0
 
                 while (
@@ -470,6 +495,11 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
                                         assignments = generated + history,
                                         state = state,
                                         protectedOff = protectedOff,
+                                        targetHours = targetHours,
+                                        contractWindowStart =
+                                            contractWindowStart,
+                                        contractWindowEnd =
+                                            contractWindowEnd,
                                         random = random
                                     )
                                 )
@@ -794,9 +824,81 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
         assignments: List<Assignment>,
         state: AppState,
         protectedOff: Map<String, Set<LocalDate>>,
+        targetHours: Double,
+        contractWindowStart: LocalDate,
+        contractWindowEnd: LocalDate,
         random: Random
     ): Double {
-        var cost = simpleDateTemplateCost(employee, date, template, assignments, state)
+        var cost =
+            simpleDateTemplateCost(
+                employee,
+                date,
+                template,
+                assignments,
+                state
+            )
+
+        if (targetHours > 0.0) {
+            val currentHours =
+                state.plannedHoursFor(
+                    employeeId = employee.id,
+                    assignments = assignments,
+                    startDate =
+                        contractWindowStart,
+                    endDate =
+                        contractWindowEnd
+                )
+
+            val projectedHours =
+                state.projectedHoursFor(
+                    employeeId = employee.id,
+                    assignments = assignments,
+                    startDate =
+                        contractWindowStart,
+                    endDate =
+                        contractWindowEnd,
+                    extraTemplate = template
+                )
+
+            val currentGap =
+                kotlin.math.abs(
+                    targetHours -
+                        currentHours
+                )
+
+            val projectedGap =
+                kotlin.math.abs(
+                    targetHours -
+                        projectedHours
+                )
+
+            /*
+             * Diensten die het contracturendoel
+             * dichterbij brengen krijgen voorkeur.
+             *
+             * Over het doel schieten kost extra,
+             * maar blijft toegestaan wanneer
+             * beschikbaarheid/ATW weinig keuze geeft.
+             */
+            cost +=
+                projectedGap * 1800.0
+
+            val overshoot =
+                (
+                    projectedHours -
+                        targetHours
+                ).coerceAtLeast(0.0)
+
+            cost +=
+                overshoot * 3200.0
+
+            if (
+                projectedGap + 0.01 <
+                currentGap
+            ) {
+                cost -= 650.0
+            }
+        }
 
         if (date in protectedOff.orEmpty(employee.id)) {
             cost += 5000.0

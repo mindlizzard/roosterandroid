@@ -46,7 +46,7 @@ checks = {
         'archivedAutoTemplateDoesNotComeBack',
         'editingReferencedTemplatePreservesOldShiftAndCreatesReplacement',
     ],
-    'desktopApp/build.gradle.kts': ['version = "0.12.0-alpha9"'],
+    'desktopApp/build.gradle.kts': ['version = "0.12.0-alpha10"'],
 }
 
 
@@ -89,8 +89,8 @@ checks.update({
         '.fromAppState(oldState)',
     ],
     'app/build.gradle.kts': [
-        'versionCode = 20',
-        'versionName = "0.12.0-alpha9"',
+        'versionCode = 21',
+        'versionName = "0.12.0-alpha10"',
     ],
     'desktopApp/src/main/kotlin/nl/roosterandroid/desktop/DesktopController.kt': [
         'borrowEmployeeFromLocation(',
@@ -294,6 +294,51 @@ checks.setdefault(
     'duplicateLocationIdsAreRejected',
     'invalidActiveLocationAndBlankNameAreRepaired',
     'duplicateEmployeeIdsAreRejected',
+])
+
+
+checks.setdefault(
+    'app/src/main/java/nl/roosterandroid/app/ContractHours.kt',
+    []
+).extend([
+    'fun ShiftTemplate.planningDurationHours()',
+    'fun Employee.expectedHoursForContractDays(',
+    'fun AppState.plannedHoursFor(',
+    'fun AppState.projectedHoursFor(',
+])
+
+checks.setdefault(
+    'app/src/main/java/nl/roosterandroid/app/ScheduleEngine.kt',
+    []
+).extend([
+    'val targetHours =',
+    'employee.expectedHoursForContractDays(',
+    'targetHours = targetHours',
+    'contractWindowStart',
+    'contractWindowEnd',
+    'val projectedHours =',
+    'val projectedGap =',
+    'overshoot * 3200.0',
+])
+
+checks.setdefault(
+    'app/src/test/java/nl/roosterandroid/app/ContractHoursTest.kt',
+    []
+).extend([
+    'normalShiftDurationIsCalculated',
+    'overnightShiftDurationIsCalculated',
+    'expectedHoursScaleWithContractDays',
+    'plannedHoursOnlyCountSelectedWeek',
+    'projectedHoursIncludeCandidateShift',
+])
+
+checks.setdefault(
+    'app/src/test/java/nl/roosterandroid/app/ContractHoursSolverTest.kt',
+    []
+).extend([
+    'solverPrefersShiftThatMatchesContractHours',
+    '40.0',
+    'shortShift.id',
 ])
 
 errors = []
