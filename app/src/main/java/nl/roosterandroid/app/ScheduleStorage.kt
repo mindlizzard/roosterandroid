@@ -149,13 +149,18 @@ class ScheduleStorage(
     fun importWorkspaceJson(
         raw: String
     ): RosterWorkspace =
-        decodeWorkspace(raw)
+        decodeWorkspace(
+            raw,
+            normalize = false
+        )
+            ?.preparedForImport()
             ?: error(
                 "Geen geldig roosterbestand"
             )
 
     private fun decodeWorkspace(
-        raw: String
+        raw: String,
+        normalize: Boolean = true
     ): RosterWorkspace? {
         if (raw.isBlank()) {
             return null
@@ -166,7 +171,11 @@ class ScheduleStorage(
                 RosterWorkspace
             >(raw)
         }.getOrNull()?.let {
-            return it.normalized()
+            return if (normalize) {
+                it.normalized()
+            } else {
+                it
+            }
         }
 
         /*

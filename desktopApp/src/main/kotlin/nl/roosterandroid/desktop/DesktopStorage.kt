@@ -4,6 +4,7 @@ import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import nl.roosterandroid.app.AppState
+import nl.roosterandroid.app.preparedForImport
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
@@ -135,7 +136,9 @@ class DesktopStorage(baseDirectory: Path? = null) {
     }
 
     fun readImport(path: Path): DesktopWorkspace =
-        decodeWorkspace(path.readText())
+        decodeWorkspace(
+            path.readText()
+        ).preparedForImport()
 
     fun exportWorkspace(
         workspace: DesktopWorkspace,

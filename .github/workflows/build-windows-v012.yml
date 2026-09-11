@@ -69,7 +69,7 @@ jobs:
             --vendor "RoosterPlanner" `
             --description "Offline roosterplanner v0.12 alpha met ATW-controle" `
             --input $inputDir `
-            --main-jar "roosterplanner-windows-0.12.0-alpha8.jar" `
+            --main-jar "roosterplanner-windows-0.12.0-alpha9.jar" `
             --main-class "nl.roosterandroid.desktop.DesktopMainKt" `
             --java-options "-Dfile.encoding=UTF-8" `
             --icon $icon `
@@ -77,7 +77,7 @@ jobs:
 
           Compress-Archive `
             -Path "$outputDir\portable\RoosterPlanner" `
-            -DestinationPath "$outputDir\RoosterPlanner-0.12.0-alpha8-portable.zip" `
+            -DestinationPath "$outputDir\RoosterPlanner-0.12.0-alpha9-portable.zip" `
             -CompressionLevel Optimal
 
           jpackage `
@@ -87,7 +87,7 @@ jobs:
             --vendor "RoosterPlanner" `
             --description "Offline roosterplanner v0.12 alpha met ATW-controle" `
             --input $inputDir `
-            --main-jar "roosterplanner-windows-0.12.0-alpha8.jar" `
+            --main-jar "roosterplanner-windows-0.12.0-alpha9.jar" `
             --main-class "nl.roosterandroid.desktop.DesktopMainKt" `
             --java-options "-Dfile.encoding=UTF-8" `
             --icon $icon `
@@ -100,9 +100,9 @@ jobs:
       - name: Upload Windows v0.12 alpha package
         uses: actions/upload-artifact@v4
         with:
-          name: RoosterPlanner-Windows-v0.12.0-alpha8
+          name: RoosterPlanner-Windows-v0.12.0-alpha9
           path: |
-            desktopApp/build/windows/RoosterPlanner-0.12.0-alpha8-portable.zip
+            desktopApp/build/windows/RoosterPlanner-0.12.0-alpha9-portable.zip
             desktopApp/build/windows/installer/*.exe
           if-no-files-found: error
           retention-days: 7

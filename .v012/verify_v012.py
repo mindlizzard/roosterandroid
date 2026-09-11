@@ -46,7 +46,7 @@ checks = {
         'archivedAutoTemplateDoesNotComeBack',
         'editingReferencedTemplatePreservesOldShiftAndCreatesReplacement',
     ],
-    'desktopApp/build.gradle.kts': ['version = "0.12.0-alpha8"'],
+    'desktopApp/build.gradle.kts': ['version = "0.12.0-alpha9"'],
 }
 
 
@@ -89,8 +89,8 @@ checks.update({
         '.fromAppState(oldState)',
     ],
     'app/build.gradle.kts': [
-        'versionCode = 19',
-        'versionName = "0.12.0-alpha8"',
+        'versionCode = 20',
+        'versionName = "0.12.0-alpha9"',
     ],
     'desktopApp/src/main/kotlin/nl/roosterandroid/desktop/DesktopController.kt': [
         'borrowEmployeeFromLocation(',
@@ -255,6 +255,46 @@ checks.update({
         'operationalConflictsAreWarnings',
     ],
 })
+
+
+checks.setdefault(
+    'app/src/main/java/nl/roosterandroid/app/WorkspaceImportPolicy.kt',
+    []
+).extend([
+    'SUPPORTED_WORKSPACE_SCHEMA = 12',
+    'fun RosterWorkspace.importValidationProblem()',
+    'fun RosterWorkspace.preparedForImport()',
+    'dubbele vestiging-ID',
+    'dubbele medewerker-ID',
+])
+
+checks.setdefault(
+    'app/src/main/java/nl/roosterandroid/app/ScheduleStorage.kt',
+    []
+).extend([
+    'normalize: Boolean = true',
+    'normalize = false',
+    '?.preparedForImport()',
+])
+
+checks.setdefault(
+    'desktopApp/src/main/kotlin/nl/roosterandroid/desktop/DesktopStorage.kt',
+    []
+).extend([
+    'import nl.roosterandroid.app.preparedForImport',
+    '.preparedForImport()',
+])
+
+checks.setdefault(
+    'app/src/test/java/nl/roosterandroid/app/WorkspaceImportPolicyTest.kt',
+    []
+).extend([
+    'emptyWorkspaceIsRejected',
+    'newerSchemaIsRejected',
+    'duplicateLocationIdsAreRejected',
+    'invalidActiveLocationAndBlankNameAreRepaired',
+    'duplicateEmployeeIdsAreRejected',
+])
 
 errors = []
 for rel, needles in checks.items():
