@@ -51,7 +51,7 @@ internal class DashboardPanel(private val controller: DesktopController) : JPane
             isOpaque = false
             add(panelTitle("Overzicht"), BorderLayout.WEST)
             add(
-                JLabel("Versie 0.12.0-alpha10 • lokaal opgeslagen • geen account nodig").apply {
+                JLabel("Versie 0.12.0-alpha14 • lokaal opgeslagen • geen account nodig").apply {
                     horizontalAlignment = SwingConstants.RIGHT
                 },
                 BorderLayout.EAST

@@ -181,7 +181,9 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
             }
         }
 
-        fillContractTargets(
+        // Specific time-window coverage must precede generic headcount and
+        // contract filling: later phases cannot replace an occupied day.
+        fillDayPartManagerDemand(
             state = state,
             ym = ym,
             employees = employees,
@@ -203,7 +205,7 @@ class ScheduleEngine(private val atw: AtwValidator = AtwValidator()) {
             random = random
         )
 
-        fillDayPartManagerDemand(
+        fillContractTargets(
             state = state,
             ym = ym,
             employees = employees,
