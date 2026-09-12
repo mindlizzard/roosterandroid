@@ -5,7 +5,10 @@ enum class RosterAdviceType {
     REVIEW_ATW_WARNING,
     ADD_HOURS,
     REDUCE_HOURS,
-    REDISTRIBUTE_WEEKENDS
+    REDISTRIBUTE_WEEKENDS,
+    REDISTRIBUTE_SETUP,
+    REDISTRIBUTE_MIDDLE,
+    REDISTRIBUTE_CLOSE
 }
 
 data class RosterAdvice(
@@ -96,6 +99,34 @@ fun RosterPriorityRow.recommendedActions():
                         "teamgemiddelde."
             )
     }
+
+    listOf(
+        Triple(
+            RosterAdviceType.REDISTRIBUTE_SETUP,
+            "SETUP herverdelen",
+            setupOverload
+        ),
+        Triple(
+            RosterAdviceType.REDISTRIBUTE_MIDDLE,
+            "TUSSEN herverdelen",
+            middleOverload
+        ),
+        Triple(
+            RosterAdviceType.REDISTRIBUTE_CLOSE,
+            "SLUIT herverdelen",
+            closeOverload
+        )
+    ).filter { (_, _, overload) -> overload >= 1.0 }
+        .forEach { (type, title, overload) ->
+            out +=
+                RosterAdvice(
+                    type = type,
+                    title = title,
+                    detail =
+                        "${prettyAdviceHours(overload)} dienst(en) boven " +
+                            "teamgemiddelde."
+                )
+        }
 
     return out
 }

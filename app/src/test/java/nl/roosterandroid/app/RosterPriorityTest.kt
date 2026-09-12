@@ -8,6 +8,71 @@ import org.junit.Test
 class RosterPriorityTest {
 
     @Test
+    fun unevenCloseShiftsAreDetected() {
+        val busy = Employee(id = "busy", name = "Daniel", contractedHoursPerWeek = 0.0)
+        val quiet = Employee(id = "quiet", name = "Kevin", contractedHoursPerWeek = 0.0)
+        val close = ShiftTemplate(
+            id = "close",
+            name = "Sluit",
+            kind = ShiftKind.CLOSE,
+            start = "16:00",
+            end = "00:00"
+        )
+        val state = AppState(
+            year = 2026,
+            month = 2,
+            employees = listOf(busy, quiet),
+            shiftTemplates = listOf(close),
+            assignments = (1..4).map { day ->
+                Assignment(
+                    employeeId = busy.id,
+                    date = "2026-02-${day.toString().padStart(2, '0')}",
+                    shiftTemplateId = close.id
+                )
+            }
+        )
+
+        val row = state.rosterPriorityRows(emptyList()).first { it.employeeId == busy.id }
+
+        assertEquals(4, row.closeShifts)
+        assertEquals(2.0, row.closeOverload, 0.001)
+        assertTrue(row.reasons.any { it.contains("SLUIT") })
+        assertEquals(RosterAdviceType.REDISTRIBUTE_CLOSE, row.primaryAdvice()?.type)
+    }
+
+    @Test
+    fun incapableManagerDoesNotDistortCloseAverage() {
+        val closer = Employee(id = "closer", name = "Daniel", contractedHoursPerWeek = 0.0)
+        val noClose = Employee(
+            id = "no-close",
+            name = "Trainee",
+            contractedHoursPerWeek = 0.0,
+            canClose = false
+        )
+        val close = ShiftTemplate(
+            id = "close",
+            name = "Sluit",
+            kind = ShiftKind.CLOSE,
+            start = "16:00",
+            end = "00:00"
+        )
+        val state = AppState(
+            year = 2026,
+            month = 2,
+            employees = listOf(closer, noClose),
+            shiftTemplates = listOf(close),
+            assignments = listOf(
+                Assignment( employeeId = closer.id, date = "2026-02-01", shiftTemplateId = close.id),
+                Assignment( employeeId = closer.id, date = "2026-02-02", shiftTemplateId = close.id)
+            )
+        )
+
+        val row = state.rosterPriorityRows(emptyList()).first { it.employeeId == closer.id }
+
+        assertEquals(0.0, row.closeOverload, 0.001)
+    }
+
+    @Test
     fun atwErrorGetsHighestPriority() {
         val first =
             Employee(

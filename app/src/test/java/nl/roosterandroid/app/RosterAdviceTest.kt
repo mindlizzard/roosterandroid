@@ -74,6 +74,20 @@ class RosterAdviceTest {
     }
 
     @Test
+    fun overloadedCloseShiftsProduceAdvice() {
+        val advice =
+            row().copy(
+                closeShifts = 5,
+                closeOverload = 2.0
+            ).recommendedActions()
+
+        assertEquals(
+            RosterAdviceType.REDISTRIBUTE_CLOSE,
+            advice.single().type
+        )
+    }
+
+    @Test
     fun underContractSuggestsExtraHours() {
         val advice =
             row(

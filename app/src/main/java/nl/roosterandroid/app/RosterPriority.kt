@@ -23,7 +23,13 @@ data class RosterPriorityRow(
     val weekendOverload: Double,
     val priorityScore: Int,
     val level: RosterPriorityLevel,
-    val reasons: List<String>
+    val reasons: List<String>,
+    val setupShifts: Int = 0,
+    val middleShifts: Int = 0,
+    val closeShifts: Int = 0,
+    val setupOverload: Double = 0.0,
+    val middleOverload: Double = 0.0,
+    val closeOverload: Double = 0.0
 ) {
     val employeeId: String
         get() = quality.employeeId
@@ -93,6 +99,57 @@ fun AppState.rosterPriorityRows(
                 )
         }
 
+    val templateKinds =
+        shiftTemplates.associate {
+            it.id to it.kind
+        }
+
+    fun shiftCount(
+        employeeId: String,
+        kind: ShiftKind
+    ): Int =
+        assignments.count { assignment ->
+            assignment.employeeId == employeeId &&
+                templateKinds[assignment.shiftTemplateId] == kind &&
+                runCatching {
+                    YearMonth.from(LocalDate.parse(assignment.date)) == ym
+                }.getOrDefault(false)
+        }
+
+    val employeesById = employees.associateBy { it.id }
+
+    fun canWork(employee: Employee, kind: ShiftKind): Boolean =
+        when (kind) {
+            ShiftKind.SETUP -> employee.canSetup
+            ShiftKind.MIDDLE -> employee.canMiddle
+            ShiftKind.CLOSE -> employee.canClose
+            else -> true
+        }
+
+    fun countsFor(kind: ShiftKind): Map<String, Int> =
+        qualityRows.mapNotNull { quality ->
+            val employee = employeesById[quality.employeeId]
+                ?: return@mapNotNull null
+            val count = shiftCount(quality.employeeId, kind)
+
+            if (!canWork(employee, kind) && count == 0) {
+                null
+            } else {
+                quality.employeeId to count
+            }
+        }.toMap()
+
+    val setupCounts = countsFor(ShiftKind.SETUP)
+    val middleCounts = countsFor(ShiftKind.MIDDLE)
+    val closeCounts = countsFor(ShiftKind.CLOSE)
+
+    fun average(counts: Map<String, Int>): Double =
+        if (counts.isEmpty()) 0.0 else counts.values.average()
+
+    val setupAverage = average(setupCounts)
+    val middleAverage = average(middleCounts)
+    val closeAverage = average(closeCounts)
+
     val teamAverage =
         if (weekendCounts.isEmpty()) {
             0.0
@@ -129,6 +186,13 @@ fun AppState.rosterPriorityRows(
                         teamAverage
                 ).coerceAtLeast(0.0)
 
+            val setupShifts = setupCounts[quality.employeeId] ?: 0
+            val middleShifts = middleCounts[quality.employeeId] ?: 0
+            val closeShifts = closeCounts[quality.employeeId] ?: 0
+            val setupOverload = (setupShifts - setupAverage).coerceAtLeast(0.0)
+            val middleOverload = (middleShifts - middleAverage).coerceAtLeast(0.0)
+            val closeOverload = (closeShifts - closeAverage).coerceAtLeast(0.0)
+
             val hourGap =
                 if (
                     quality.targetHours >
@@ -158,11 +222,16 @@ fun AppState.rosterPriorityRows(
                         20.0
                 ).roundToInt()
 
+            val unpopularShiftPenalty =
+                ((setupOverload + middleOverload + closeOverload) * 10.0)
+                    .roundToInt()
+
             val priorityScore =
                 quality.atwErrors * 100 +
                     atwWarnings * 25 +
                     hourPenalty +
-                    weekendPenalty
+                    weekendPenalty +
+                    unpopularShiftPenalty
 
             val level =
                 when {
@@ -213,6 +282,18 @@ fun AppState.rosterPriorityRows(
                                 "weekend boven teamgemiddelde"
                         )
                     }
+
+                    listOf(
+                        "SETUP" to setupOverload,
+                        "TUSSEN" to middleOverload,
+                        "SLUIT" to closeOverload
+                    ).filter { (_, overload) -> overload >= 1.0 }
+                        .forEach { (label, overload) ->
+                            add(
+                                "${prettyPriorityNumber(overload)} $label-dienst(en) " +
+                                    "boven teamgemiddelde"
+                            )
+                        }
                 }
 
             RosterPriorityRow(
@@ -234,7 +315,13 @@ fun AppState.rosterPriorityRows(
                 level =
                     level,
                 reasons =
-                    reasons
+                    reasons,
+                setupShifts = setupShifts,
+                middleShifts = middleShifts,
+                closeShifts = closeShifts,
+                setupOverload = roundPriority(setupOverload),
+                middleOverload = roundPriority(middleOverload),
+                closeOverload = roundPriority(closeOverload)
             )
         }
         .sortedWith(

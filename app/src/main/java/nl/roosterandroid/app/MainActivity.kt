@@ -1569,6 +1569,12 @@ private fun PriorityCard(
             )
 
             Text(
+                "SETUP ${row.setupShifts} • TUSSEN ${row.middleShifts} • " +
+                    "SLUIT ${row.closeShifts}",
+                style = MaterialTheme.typography.bodySmall
+            )
+
+            Text(
                 "ATW: ${quality.atwErrors} fout • " +
                     "${row.atwWarnings} waarschuwing",
                 style =

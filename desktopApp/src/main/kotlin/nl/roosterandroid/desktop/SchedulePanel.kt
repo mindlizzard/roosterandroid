@@ -184,6 +184,8 @@ internal class SchedulePanel(private val controller: DesktopController) : JPanel
                             "(${row.priorityScore}) • " +
                             "$hours • " +
                             "${row.weekendsWorked} weekenden • " +
+                            "S${row.setupShifts}/T${row.middleShifts}/" +
+                            "SL${row.closeShifts} • " +
                             (
                                 advice?.let {
                                     "ADVIES: ${it.title}"
