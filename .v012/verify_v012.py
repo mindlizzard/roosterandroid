@@ -46,7 +46,7 @@ checks = {
         'archivedAutoTemplateDoesNotComeBack',
         'editingReferencedTemplatePreservesOldShiftAndCreatesReplacement',
     ],
-    'desktopApp/build.gradle.kts': ['version = "0.12.0-alpha12"'],
+    'desktopApp/build.gradle.kts': ['version = "0.12.0-alpha13"'],
 }
 
 
@@ -89,8 +89,8 @@ checks.update({
         '.fromAppState(oldState)',
     ],
     'app/build.gradle.kts': [
-        'versionCode = 23',
-        'versionName = "0.12.0-alpha12"',
+        'versionCode = 24',
+        'versionName = "0.12.0-alpha13"',
     ],
     'desktopApp/src/main/kotlin/nl/roosterandroid/desktop/DesktopController.kt': [
         'borrowEmployeeFromLocation(',
@@ -418,6 +418,53 @@ checks.setdefault(
     'atwWarningRaisesAttentionLevel',
     'weekendOverloadIsDetected',
     'largeContractGapGetsHighPriority',
+])
+
+
+checks.setdefault(
+    'app/src/main/java/nl/roosterandroid/app/RosterAdvice.kt',
+    []
+).extend([
+    'enum class RosterAdviceType',
+    'data class RosterAdvice(',
+    'fun RosterPriorityRow.recommendedActions()',
+    'fun RosterPriorityRow.primaryAdvice()',
+    'RosterAdviceType.FIX_ATW',
+    'RosterAdviceType.ADD_HOURS',
+    'RosterAdviceType.REDUCE_HOURS',
+    'RosterAdviceType.REDISTRIBUTE_WEEKENDS',
+])
+
+checks.setdefault(
+    'app/src/test/java/nl/roosterandroid/app/RosterAdviceTest.kt',
+    []
+).extend([
+    'atwErrorIsFirstAdvice',
+    'underContractSuggestsExtraHours',
+    'overContractSuggestsReducingHours',
+    'weekendOverloadSuggestsRedistribution',
+    'healthyRosterNeedsNoAdvice',
+    'multipleProblemsProduceMultipleActions',
+])
+
+checks.setdefault(
+    'app/src/main/java/nl/roosterandroid/app/MainActivity.kt',
+    []
+).extend([
+    'row.recommendedActions()',
+    '"Aanbevolen actie"',
+    '"Geen actie nodig • rooster ziet er goed uit."',
+    '"• ${advice.title}: ${advice.detail}"',
+])
+
+checks.setdefault(
+    'desktopApp/src/main/kotlin/nl/roosterandroid/desktop/SchedulePanel.kt',
+    []
+).extend([
+    'import nl.roosterandroid.app.primaryAdvice',
+    'row.primaryAdvice()',
+    '"ADVIES: ${it.title}"',
+    '"geen actie nodig"',
 ])
 
 errors = []

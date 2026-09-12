@@ -8,6 +8,7 @@ import nl.roosterandroid.app.ResponsibilityRule
 import nl.roosterandroid.app.ShiftKind
 import nl.roosterandroid.app.ShiftTemplate
 import nl.roosterandroid.app.rosterPriorityRows
+import nl.roosterandroid.app.primaryAdvice
 import java.awt.BorderLayout
 import java.awt.Color
 import java.awt.Component
@@ -152,6 +153,9 @@ internal class SchedulePanel(private val controller: DesktopController) : JPanel
                                 "${quality.plannedHours}u"
                             }
 
+                        val advice =
+                            row.primaryAdvice()
+
                         val priority =
                             when (row.level) {
                                 nl.roosterandroid.app
@@ -179,7 +183,13 @@ internal class SchedulePanel(private val controller: DesktopController) : JPanel
                             "$priority " +
                             "(${row.priorityScore}) • " +
                             "$hours • " +
-                            "${row.weekendsWorked} weekenden"
+                            "${row.weekendsWorked} weekenden • " +
+                            (
+                                advice?.let {
+                                    "ADVIES: ${it.title}"
+                                }
+                                    ?: "geen actie nodig"
+                            )
                     }
             }
 

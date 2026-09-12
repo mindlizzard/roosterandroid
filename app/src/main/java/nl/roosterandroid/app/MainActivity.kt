@@ -1446,6 +1446,9 @@ private fun PriorityCard(
     val quality =
         row.quality
 
+    val advices =
+        row.recommendedActions()
+
     val hourText =
         if (quality.targetHours > 0.0) {
             "${quality.plannedHours} / " +
@@ -1580,6 +1583,32 @@ private fun PriorityCard(
                     color =
                         priorityColor
                 )
+            }
+
+            Text(
+                "Aanbevolen actie",
+                style =
+                    MaterialTheme.typography.labelLarge,
+                fontWeight =
+                    FontWeight.Bold
+            )
+
+            if (advices.isEmpty()) {
+                Text(
+                    "Geen actie nodig • rooster ziet er goed uit.",
+                    style =
+                        MaterialTheme.typography.bodySmall,
+                    color =
+                        MaterialTheme.colorScheme.primary
+                )
+            } else {
+                advices.forEach { advice ->
+                    Text(
+                        "• ${advice.title}: ${advice.detail}",
+                        style =
+                            MaterialTheme.typography.bodySmall
+                    )
+                }
             }
         }
     }
